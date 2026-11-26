@@ -168,6 +168,22 @@ def test_cli_audit_pass_fail_sarif_and_report(
     )
     assert bad_out.exit_code == EXIT_CONFIG_ERROR
 
+    # 8. --fail-on info passes on Grade A (0 findings) and --help lists all 5 severities
+    info_res = runner.invoke(
+        app,
+        [
+            "audit",
+            str(orthogonal_adapter_pair[0]),
+            str(orthogonal_adapter_pair[1]),
+            "--fail-on",
+            "info",
+        ],
+    )
+    assert info_res.exit_code == EXIT_PASS
+    help_res = runner.invoke(app, ["audit", "--help"], env={"COLUMNS": "200"})
+    assert help_res.exit_code == EXIT_PASS
+    assert "critical|high|medium|low|info" in help_res.stdout
+
 
 def test_cli_stage6_stubs_exit_deterministically(
     orthogonal_adapter_pair: tuple[Path, Path],

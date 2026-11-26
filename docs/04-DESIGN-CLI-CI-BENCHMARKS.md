@@ -13,7 +13,7 @@
 Built with **Typer + Rich + Pydantic v2** (`extra="forbid"` on `loraspec.toml`).
 - **Global & Subcommand Surface**: `doctor`, `inspect`, `audit`, `merge`, `bench`, `serve`, `replay`, `report`.
 - **Stage 5 vs. Stage 6 Behavior**:
-  - Working immediately in Stage 5: `--version`, `doctor`, `inspect`, `audit --tiers 0`, `report`.
+  - Working immediately in Stage 5: `--version`, `doctor`, `inspect`, `audit` (`--tiers 0` and `--tiers 0,1`), `report`.
   - Clean Stage 6 stubs (`merge` [M1], `bench` [M2], `serve`/`replay` [M3]) print exact milestone guidance and exit deterministically with `EXIT_CONFIG_ERROR (2)` until implemented in M1–M3.
 
 ---

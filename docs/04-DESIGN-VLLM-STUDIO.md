@@ -32,6 +32,7 @@ When `LORASPEC_MOLORA_ENABLE=1` (and `LORASPEC_ADAPTERS=/path/to/adapters.json`)
 - `GET /api/v1/adapters`: Returns loaded `LoRAAdapterSpec` descriptors + layer count + parameter budget.
 - `POST /api/v1/audit`: Runs Tier 0–1 spectral audit over local adapter directory paths and returns full `AuditReport` JSON (reusing `SDD-01` directly).
 - `POST /api/v1/knots/preview`: Computes factorized `KnOTS` preview summary (`energy_retained`, pre/post sign-conflict drop) for UI sliders.
+- `GET /api/v1/benchmarks`: Returns `BenchmarkSuiteSummary` (4-arm L4/A100 ablation, speedup vs. `peft` eager Arrow, accuracy & GST-inclusive INR spend ledger).
 - `POST /v1/chat/completions`: OpenAI-compatible SSE stream emitting `data: {...}` chunks augmented with `"loraspec_routing": MoLoRARouteTelemetry.model_dump()`.
 - `WebSocket /ws/telemetry`: Streams real-time token-by-token routing frames + VRAM & ITL telemetry to connected Studio sessions.
 

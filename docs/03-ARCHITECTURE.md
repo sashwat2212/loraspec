@@ -1,7 +1,7 @@
 # Stage 3: High-Level System Architecture & ADRs — `loraspec`
 
 > [!NOTE]
-> **Document Status**: Locked (Stage 3)
+> **Document Status**: Locked (`GATE-3` Passed)
 > **Product**: **`loraspec`** — LoRA Subspace Auditor (`KnOTS`) & Per-Token Top-$k$ `MoLoRA` Triton Studio
 > **Upstream References**: [00-CHARTER.md](./00-CHARTER.md) | [01-BRD.md](./01-BRD.md) | [02-FRD-PRD.md](./02-FRD-PRD.md)
 > **Component ID Convention**: `ARCH-COMP-01` through `ARCH-COMP-12` (traced backward to `FEAT-*` and forward to Stage 4 `SDD-01`..`SDD-05`).
@@ -182,10 +182,10 @@ loraspec/
 │   ├── core/                        # errors.py, schemas.py, config.py, budget.py, manifest.py, spectral_math.py
 │   ├── inspect/                     # safetensors_reader.py (pickle-free binary parser & PEFT matcher)
 │   ├── auditor/                     # probes.py (RULE-CONF/SPEC-*), grading.py (MergeRiskScore & Grade A-F)
-│   ├── knots/                       # aligner.py (factorized KnOTS joint-SVD), operators.py (TIES/DARE/GKS) [M1]
-│   ├── kernels/                     # router.py (Arrow prototypes), arrow_sgmv.py (@triton.jit + MPS/CPU) [M2]
+│   ├── knots/                       # aligner.py (factorized KnOTS), operators.py (TIES/DARE/GKS), serializer.py [M1]
+│   ├── kernels/                     # router.py, arrow_sgmv.py (@triton.jit), reference.py, dispatch.py, bench.py [M2]
 │   ├── serving/                     # vllm_plugin.py, gateway.py (FastAPI + WS), demo_replay.py [M3]
-│   └── reporting/                   # json_writer.py, sarif_writer.py, html_renderer.py (Jinja2 zero-CDN)
+│   └── reporting/                   # json_writer.py, sarif_writer.py, html_renderer.py (Jinja2 zero-CDN) [M1]
 ├── ui/                              # React 19 + TypeScript + Vite + Tailwind Dark-Mode Studio [M3]
 ├── assets/demo_replays/             # Authentic recorded L4/A100 telemetry JSONL for DEMO_REPLAY=true [M3-M4]
 ├── benchmarks/planted_collisions/   # Synthetic fault corpus for KPI-RES-01 (100% recall check) [M1]

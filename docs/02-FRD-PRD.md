@@ -58,9 +58,9 @@ Every feature is graded under [00-CHARTER.md §6](./00-CHARTER.md#6-unified-mult
 | **`FEAT-17`**: Single-Command `Dockerfile` + `docker-compose.yml` Stack | `EPIC-05` | `P2` | `Could` | `G3-Standard` | `S` | `T3` | `M3` | `BRD-REQ-17` | `FRD-REQ-30` | `ARCH-COMP-09`, `ARCH-COMP-12` | `SDD-04` | `GATE-6 (M3)` |
 | **`FEAT-18`**: JSON, SARIF 2.1.0, Offline HTML (`Jinja2`) & `manifest.json` | `EPIC-06` | `P0` | `Must` | `G1-Critical` | `M` | `T0` | `Stage 5` (HTML `M1`) | `BRD-REQ-18` | `FRD-REQ-31`, `FRD-REQ-32` | `ARCH-COMP-11` | `SDD-05` | `GATE-5` / `GATE-6 (M1)` |
 | **`FEAT-19`**: Typer CLI Surface, `loraspec.toml` (`extra="forbid"`) & Exit `0–5` | `EPIC-06` | `P0` | `Must` | `G1-Critical` | `M` | `T0` | `Stage 5` | `BRD-REQ-19` | `FRD-REQ-33` | `ARCH-COMP-01` | `SDD-05` | `GATE-5` |
-| **`FEAT-20`**: `$0` CPU GitHub Marketplace Action (`action.yml`) | `EPIC-06` | `P1` | `Should` | `G2-High` | `S` | `T0` | `M1` | `BRD-REQ-20` | `FRD-REQ-34` | `ARCH-COMP-11` | `SDD-05` | `GATE-6 (M1)` |
+| **`FEAT-20`**: `$0` CPU GitHub Marketplace Action (`action.yml`) | `EPIC-06` | `P1` | `Should` | `G2-High` | `S` | `T0` | `M1` | `BRD-REQ-20` | `FRD-REQ-34` | `ARCH-COMP-11` | `SDD-05` | `GATE-6 (M1) / GATE-7` |
 | **`FEAT-21`**: Atomic `GpuBudgetGuard` & `--smoke < ₹10` Circuit Breaker | `EPIC-07` | `P0` | `Must` | `G1-Critical` | `M` | `T0..T3` | `Stage 5` | `BRD-REQ-21` | `FRD-REQ-35` | `ARCH-COMP-02` | `SDD-05` | `GATE-5` |
-| **`FEAT-22`**: 4-Arm L4/A100 Empirical Study & Social Asset Exporter | `EPIC-07` | `P2` | `Should` | `G3-Standard` | `XL` | `T2..T3` | `M4` | `BRD-REQ-22` | `FRD-REQ-36` | `ARCH-COMP-10` | `SDD-05` | `GATE-6 (M4)` |
+| **`FEAT-22`**: 4-Arm L4/A100 Empirical Study & Social Asset Exporter | `EPIC-07` | `P2` | `Should` | `G3-Standard` | `XL` | `T2..T3` | `M4` | `BRD-REQ-22` | `FRD-REQ-36` | `ARCH-COMP-10` | `SDD-05` | `GATE-6 (M4) / GATE-7` |
 
 ---
 
@@ -402,11 +402,11 @@ Every atomic functional requirement specifies its exact **Grades**, **Inputs**, 
 
 #### `FRD-REQ-26` — `DEMO_REPLAY=true` Zero-Cost Recorded Telemetry Mode
 - **Grades & Traceability**: `P2` | `Should` | `G2-High` | `Complexity: M` | `Tier: T3` (`₹0`) | `Milestone: M3` | `Gate: GATE-6 (M3)` | `BRD-REQ-15` / `FEAT-15`
-- **Inputs**: `DEMO_REPLAY=true` env var (or `loraspec serve --demo-replay` / `loraspec replay <trace.jsonl>`), JSONL trace bundles in `assets/demo_replays/`.
+- **Inputs**: `DEMO_REPLAY=true` env var (or `loraspec serve --demo-replay` / `loraspec replay <trace.jsonl> --speed <float>`), JSONL trace bundles in `assets/demo_replays/`.
 - **Preconditions**: Recorded JSONL session files and precomputed audit/roofline JSON bundles exist in `assets/demo_replays/`.
 - **Processing & Mathematical/Algorithmic Rules**:
   1. Boot FastAPI gateway with **zero `torch`, `triton`, or `vLLM` imports required**.
-  2. Stream recorded L4/A100 `MoLoRARouteTelemetry` traces over both `/v1/chat/completions` SSE and `/ws/telemetry` paced by recorded `itl_ms / speed` (or zero-delay when `speed="instant"`).
+  2. Stream recorded L4/A100 `MoLoRARouteTelemetry` traces over both `/v1/chat/completions` SSE and `/ws/telemetry` paced by recorded `itl_ms / speed` (or zero-delay when `speed <= 0.0` in CLI or `speed="instant"` on `/ws/telemetry`).
   3. Serve pre-recorded L4/A100 `AuditReport`, `KnOTSPreviewResponse`, and `BenchmarkSuiteSummary` over `/api/v1/*`.
 - **Outputs**: Authentic GPU telemetry experience at `₹0/month` hosting cost.
 - **Failure & Edge-Case Handling**: Missing or corrupt JSONL replay lines raise deterministic `ConfigError` at startup rather than silent partial crashes.
@@ -508,7 +508,7 @@ Every atomic functional requirement specifies its exact **Grades**, **Inputs**, 
 - **Acceptance Test Criteria**: `test_cli.py` and `test_schemas_and_config.py` pass across `--version`, `doctor`, `inspect`, `audit` (pass/fail/duplicate/markup/tiers/bad-out-dir), `report`, unknown TOML keys, inverted thresholds, and wheel-installed `uvx` smoke tests.
 
 #### `FRD-REQ-34` — `$0` CPU GitHub Marketplace Composite Action (`action.yml`)
-- **Grades & Traceability**: `P1` | `Should` | `G2-High` | `Complexity: S` | `Tier: T0` (`₹0`) | `Milestone: M1` | `Gate: GATE-6 (M1)` | `BRD-REQ-20` / `FEAT-20`
+- **Grades & Traceability**: `P1` | `Should` | `G2-High` | `Complexity: S` | `Tier: T0` (`₹0`) | `Milestone: M1` | `Gate: GATE-6 (M1) / GATE-7` | `BRD-REQ-20` / `FEAT-20`
 - **Inputs**: Action inputs (`adapter-paths`, `config`, `fail-on`, `sarif-file`, `html-file`, `out-dir`, `loraspec-version`).
 - **Preconditions**: Runs on `ubuntu-latest` CPU runner with zero GPU or `torch` required.
 - **Processing & Mathematical/Algorithmic Rules**:
@@ -536,7 +536,7 @@ Every atomic functional requirement specifies its exact **Grades**, **Inputs**, 
 - **Acceptance Test Criteria**: Concurrent `asyncio.gather` test enforces hard ceiling under race conditions; `30m` L4 under `--smoke` raises `BudgetExceededError` with `exit_code == 3`; `local_cpu` records `0.0` INR; double-reconcile raises `ConfigError`.
 
 #### `FRD-REQ-36` — Controlled 4-Arm L4/A100 Empirical Study & Social Asset Generator
-- **Grades & Traceability**: `P2` | `Should` | `G3-Standard` | `Complexity: XL` | `Tier: T2..T3` | `Milestone: M4` | `Gate: GATE-6 (M4)` | `BRD-REQ-22` / `FEAT-22`
+- **Grades & Traceability**: `P2` | `Should` | `G3-Standard` | `Complexity: XL` | `Tier: T2..T3` | `Milestone: M4` | `Gate: GATE-6 (M4) / GATE-7` | `BRD-REQ-22` / `FEAT-22`
 - **Inputs**: Base model (`Qwen/Qwen2.5-3B-Instruct` or `Qwen/Qwen3-4B-Instruct`), 6 heterogeneous domain LoRAs (`sql-lora` $r=16$, `rust-lora` $r=32$, `json-lora` $r=8$, `python-lora` $r=32$, `math-lora` $r=16$, `general-lora` $r=16$), single-domain + compositional prompts, `--smoke` / `--max-cost-inr`.
 - **Preconditions**: `M1`, `M2`, `M3` gates passed; every script passes `--smoke < ₹10` locally/L4 before full sweep; cumulative GPU spend remains `<= ₹3,000`.
 - **Processing & Mathematical/Algorithmic Rules**:
@@ -564,10 +564,10 @@ loraspec [GLOBAL OPTIONS] <COMMAND> [ARGS] [OPTIONS]
 | **`inspect`** | **Stage 5** | `PATH` (`Path`, adapter dir or `.safetensors`) | `--json` (`bool`, default `False`): prints canonical `LoRAAdapterSpec` JSON instead of Rich table. |
 | **`audit`** | **Stage 5** (`--html` **M1**) | `PATHS...` (`list[Path]`, `>= 1` adapter dirs/files) | • `--config PATH` (`Path \| None`, default `None` -> auto-discovers `./loraspec.toml`)<br>• `--tiers TEXT` (`str`, default `"0,1"`, supported `"0"` or `"0,1"`)<br>• `--fail-on [critical\|high\|medium\|low\|info]` (`Severity \| None`, overrides `config.project.fail_on`)<br>• `--out-dir PATH` (`Path \| None`, writes `report.json` + `manifest.json`)<br>• `--sarif PATH` (`Path \| None`, writes OASIS SARIF 2.1.0)<br>• `--seed INT` (`int`, default `42`, stamped into `RunManifest`)<br>• `[Stage 6 M1]` `--html PATH` (`Path \| None`, writes zero-CDN offline HTML Certification Card). |
 | **`report`** | **Stage 5** (`--html` **M1**) | `REPORT_JSON` (`Path`, saved `report.json`) | • `--sarif PATH` (`Path \| None`, re-renders SARIF 2.1.0)<br>• `--json-out PATH` (`Path \| None`, validates & re-serializes `AuditReport` JSON)<br>• `[Stage 6 M1]` `--html PATH` (`Path \| None`, renders zero-CDN HTML from saved `report.json`). |
-| **`merge`** | **Stage 5 Stub → M1** | `PATHS...` (`list[Path]`, `>= 2` adapters) | **Stage 5 Stub Flags**:<br>• `--out-dir PATH` (default `./merged_knots_lora`)<br>• `--method TEXT` (default `knots_ties`: `knots_ties \| knots_dare_ties \| knots_linear`)<br>• `--target-rank INT` (default `16`)<br>**Stage 6 M1 Planned Extensions**:<br>• `--weights TEXT` (comma-separated floats, default uniform)<br>• `--ties-density FLOAT` (default `0.50`), `--dare-drop-rate FLOAT` (default `0.20`)<br>• `--gks-adapter PATH`, `--gks-lambda FLOAT` (default `1.0`)<br>• `--dtype [f16\|bf16\|f32]`, `--seed INT` (default `42`), `--config PATH`. |
+| **`merge`** | **Stage 5 Stub → M1** | `PATHS...` (`list[Path]`, `>= 2` adapters) | **Stage 5 Stub Flags**:<br>• `--out-dir PATH` (default `./merged_knots_lora`)<br>• `--method TEXT` (default `knots_ties`: `knots_ties \| knots_dare_ties \| knots_linear`)<br>• `--target-rank INT` (default `16`)<br>**Stage 6 M1 Planned Extensions**:<br>• `--weights TEXT` (comma-separated floats, default uniform)<br>• `--ties-density FLOAT` (default `0.50`), `--dare-drop-rate FLOAT` (default `0.20`)<br>• `--layer-policy [union\|intersection]` (default `union`, disjoint-layer handling)<br>• `--gks-adapter PATH`, `--gks-lambda FLOAT` (default `1.0`)<br>• `--dtype [f16\|bf16\|f32]`, `--seed INT` (default `42`), `--config PATH`. |
 | **`bench`** | **Stage 5 Stub → M2** | `PATHS...` (`list[Path]`, adapters to benchmark) | **Stage 5 Stub Flags**:<br>• `--top-k INT` (default `2`)<br>• `--smoke / --no-smoke` (`bool`, default `True`, `< ₹10` cap)<br>**Stage 6 M2 Planned Extensions**:<br>• `--hardware [auto\|local_cpu\|local_mps\|e2e_l4_24gb\|e2e_a100_80gb]`<br>• `--max-cost-inr FLOAT` (default `2500.0`, ceiling `<= 3000.0`)<br>• `--batch-sizes TEXT` (`"1,4,16,32,64"`), `--dtypes TEXT` (`"fp16,bf16"`), `--out-dir PATH`, `--config PATH`. |
 | **`serve`** | **Stage 5 Stub → M3** | *None* | **Stage 5 Stub Flags**:<br>• `--host TEXT` (default `127.0.0.1`), `--port INT` (default `8000`)<br>• `--demo-replay / --no-demo-replay` (`bool`, default `True`)<br>**Stage 6 M3 Planned Extensions**:<br>• `--model TEXT`, `--adapters PATH...`, `--top-k INT`, `--temperature FLOAT`, `--replay-dir PATH`, `--config PATH`. |
-| **`replay`** | **Stage 5 Stub → M3** | `TRACE_PATH` (`Path`, telemetry JSONL) | **Stage 5 Stub Flags**:<br>• `--speed FLOAT` (default `1.0`)<br>**Stage 6 M3 Planned Extensions**:<br>• `--ws-url TEXT` (optional live WS target), `--json-stream` (`bool`, default `False`). |
+| **`replay`** | **Stage 5 Stub → M3** | `TRACE_PATH` (`Path`, telemetry JSONL) | **Stage 5 Stub Flags**:<br>• `--speed FLOAT` (default `1.0`; `<= 0.0` replays with zero delay)<br>**Stage 6 M3 Planned Extensions**:<br>• `--ws-url TEXT` (optional live WS target), `--json-stream` (`bool`, default `False`). |
 
 ### 4.2 Deterministic Exit Codes & Domain Exceptions (`src/loraspec/core/errors.py`)
 | Code | Constant | Domain Exception(s) | Meaning & Trigger Conditions |
@@ -575,7 +575,7 @@ loraspec [GLOBAL OPTIONS] <COMMAND> [ARGS] [OPTIONS]
 | `0` | `EXIT_PASS` | — | Command succeeded cleanly with zero audit findings meeting `--fail-on` threshold. |
 | `1` | `EXIT_AUDIT_FAIL` | `AuditFailedError` | Completed audit/evaluation flagged findings $\ge$ `--fail-on` severity. |
 | `2` | `EXIT_CONFIG_ERROR` | `ConfigError`, `AdapterParseError` | Invalid CLI args/tiers, malformed/unknown-field `loraspec.toml`, missing/corrupt `.safetensors` or `.bin` pickle checkpoint, unwritable path, or Stage 6 stub invocation. |
-| `3` | `EXIT_BUDGET_EXCEEDED` | `BudgetExceededError` | Hard `--max-cost-inr` / `--max-gpu-hours` / `--smoke` ceiling triggered by `GpuBudgetGuard`. |
+| `3` | `EXIT_BUDGET_EXCEEDED` | `BudgetExceededError` | Hard `--max-cost-inr` / `BudgetConfig.max_cost_inr` / `--smoke` ceiling triggered by `GpuBudgetGuard`. |
 | `4` | `EXIT_RUNTIME_ERROR` | `RuntimeExecutionError` | Missing optional CUDA/Triton/`vLLM` runtime or unrecoverable kernel/serving failure. |
 | `5` | `EXIT_PARITY_ERROR` | `KernelParityError` | Triton `Arrow-SGMV` vs. PyTorch reference check violated numerical tolerance (`atol`/`rtol`). |
 
@@ -656,6 +656,7 @@ SEVERITY_RANK: dict[Severity, int] = {
 
 
 def meets_fail_threshold(findings: Sequence[AuditFinding], fail_on: Severity) -> bool:
+    """Return True if any finding meets or exceeds the configured fail_on severity."""
     threshold = SEVERITY_RANK[fail_on]
     return any(SEVERITY_RANK[f.severity] >= threshold for f in findings)
 
@@ -814,7 +815,15 @@ class MoLoRARouteTelemetryBatch(BaseModel):  # Planned: M2 (SDD-03)
 
 class KernelBenchmarkPoint(BaseModel):  # Planned: M2 (SDD-03 / SDD-05)
     hardware_profile: str
-    arm_name: Literal["base", "peft_eager_arrow", "peft_ties", "vllm_static", "knots_ties", "triton_arrow_sgmv"]
+    arm_name: Literal[
+        "base",
+        "peft_linear",
+        "peft_ties",
+        "peft_eager_arrow",
+        "vllm_static",
+        "knots_ties",
+        "triton_arrow_sgmv",
+    ]
     batch_size: int
     seq_len: int
     dtype: Literal["fp16", "bf16", "fp32"]
@@ -857,7 +866,7 @@ class KnOTSPreviewResponse(BaseModel):  # Planned: M3 (SDD-04)
 |---|---|---|---|
 | `/health` | `GET` | *None* | `200 OK`: `{"status":"ok","demo_replay":bool,"backend":str,"loaded_adapters":int,"version":str}` |
 | `/api/v1/adapters` | `GET` | *None* | `200 OK`: `list[LoRAAdapterSpec]` of currently mounted or replay adapters. |
-| `/api/v1/audit` | `POST` | `{"adapter_paths":list[str],"fail_on":Severity,"tiers":str}` | `200 OK`: complete `AuditReport` JSON. `400`/`422` on invalid path or malformed `.safetensors` (`AdapterParseError`). |
+| `/api/v1/audit` | `POST` | `{"adapter_paths":list[str],"fail_on":Severity="high","tiers":str="0,1"}` | `200 OK`: complete `AuditReport` JSON. `400`/`422` on invalid path or malformed `.safetensors` (`AdapterParseError`). |
 | `/api/v1/knots/preview` | `POST` | `KnOTSPreviewRequest` | `200 OK`: `KnOTSPreviewResponse` (`KnOTSMergeSummary` + pre/post conflict comparison). `400`/`422` on invalid params or mismatched base models. |
 | `/api/v1/benchmarks` | `GET` | Optional `?hardware=all\|l4\|a100` | `200 OK`: `BenchmarkSuiteSummary` (4-arm L4/A100 roofline, speedup vs `peft` eager Arrow, accuracy & INR ledger; aligns 100% with `SDD-04 §3`). `503` if no replay/bench artifact loaded. |
 | `/v1/chat/completions` | `POST` (SSE) | OpenAI `ChatCompletionRequest` + `{"top_k":2,"temperature_router":1.0,"stream":true}` | `200 OK` SSE `data: {...}` OpenAI chunks augmented with `"loraspec_routing": MoLoRARouteTelemetry`. `503` if GPU unavailable and `DEMO_REPLAY=false`. |

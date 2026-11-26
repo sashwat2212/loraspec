@@ -179,7 +179,7 @@ def audit(
     ] = "0,1",
     fail_on: Annotated[
         Severity | None,
-        typer.Option("--fail-on", help="Severity threshold (critical|high|medium|low)."),
+        typer.Option("--fail-on", help="Severity threshold (critical|high|medium|low|info)."),
     ] = None,
     out_dir: Annotated[
         Path | None,
