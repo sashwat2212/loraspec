@@ -8,7 +8,7 @@
 
 ## Current Status: Stage 5 Walking Skeleton (`v0.1.0-alpha`)
 
-This repository contains the complete locked SDLC Stages 0–5 engineering specification corpus (`docs/`) and the verified Stage 5 Python foundation:
+This repository contains the complete **`SPEC-GATE`** 8-stage SDLC specification corpus (`docs/`, locked across Stages 0–5 with unified multi-dimensional grading) and the verified Stage 5 Python foundation:
 
 - **Bounds-Safe `.safetensors` & PEFT Inspector**: Zero-`pickle` binary header + IEEE-754 `F32`/`F16`/`BF16` tensor reader with `adapter_config.json` validation and `lora_A`/`lora_B` pairing (`src/loraspec/inspect/`).
 - **Factorized Rank-$r$ QR+SVD & Grassmann Subspace Math**: Computes singular spectra, effective stable rank $r_{\text{eff}} = \|\Delta W\|_F^2 / \|\Delta W\|_2^2$, spectral norm spikes, and pairwise **Grassmann principal angles**, **chordal similarity**, **geodesic distance**, and **directional sign conflicts** without materializing $O(d_{\text{out}} d_{\text{in}})$ matrices—supporting both pure-Python offline CPU execution and optional NumPy BLAS/LAPACK fast paths.
@@ -50,21 +50,21 @@ uv run pytest -v
 
 ---
 
-## Documentation Index (SDLC Stages 0–5)
+## Documentation Index (`SPEC-GATE` SDLC Stages 0–5)
 
 | Stage | Document | Description |
 |---|---|---|
 | Research | [docs/RESEARCH-DOSSIER.md](./docs/RESEARCH-DOSSIER.md) | 2025–2026 LoRA interference, Grassmann geometry, `KnOTS`, `Arrow`, `GenKnowSub` & `vLLM V1` dossier |
-| Stage 0 | [docs/00-CHARTER.md](./docs/00-CHARTER.md) | Charter, explicit rename collision process (`loraspec`), 5-channel scope & `₹2,000–₹3,000` budget |
-| Stage 1 | [docs/01-BRD.md](./docs/01-BRD.md) | Business Requirements (`BRD-REQ-01`–`22`), KPIs (`KPI-ENG/RES/SHW`) & risk register |
-| Stage 2 | [docs/02-FRD-PRD.md](./docs/02-FRD-PRD.md) | Functional Requirements (`FRD-REQ-01`–`36`), `FEAT-01`–`22`, frozen CLI/API/SDK contracts |
+| Stage 0 | [docs/00-CHARTER.md](./docs/00-CHARTER.md) | Charter, 4-Gate rename collision process (`loraspec`), **`SPEC-GATE`** 8-Stage SDLC & Unified Grading Rubric, `₹2,000–₹3,000` budget |
+| Stage 1 | [docs/01-BRD.md](./docs/01-BRD.md) | Graded Business Requirements (`BRD-REQ-01`–`22`), KPIs (`KPI-ENG/RES/SHW`), risk register & Stakeholder Sign-Off Matrix |
+| Stage 2 | [docs/02-FRD-PRD.md](./docs/02-FRD-PRD.md) | Complete PRD (`EPIC-01`–`07`, Graded `FEAT-01`–`22`) & FRD (Graded `FRD-REQ-01`–`36`, CLI/API/Pydantic v2 contracts, Graded `NFR-01`–`08`) |
 | Stage 3 | [docs/03-ARCHITECTURE.md](./docs/03-ARCHITECTURE.md) | 5-Plane Architecture (`ARCH-COMP-01`–`12`), sequence diagrams, threat model & `ADR-001`–`009` |
 | Stage 4 | [docs/04-DESIGN-SPECTRAL-AUDITOR.md](./docs/04-DESIGN-SPECTRAL-AUDITOR.md) | `SDD-01`: Bounds-safe `.safetensors`, factorized QR+SVD, Grassmann angles & `MergeRiskScore` |
 | Stage 4 | [docs/04-DESIGN-KNOTS-MERGER.md](./docs/04-DESIGN-KNOTS-MERGER.md) | `SDD-02`: Memory-safe Gram-QR `KnOTS` alignment, `TIES`/`DARE`, `GenKnowSub` & PEFT export |
 | Stage 4 | [docs/04-DESIGN-TRITON-MOLORA.md](./docs/04-DESIGN-TRITON-MOLORA.md) | `SDD-03`: `Arrow` prototype router, `@triton.jit` Top-$k$ `Arrow-SGMV` & PyTorch parity spec |
 | Stage 4 | [docs/04-DESIGN-VLLM-STUDIO.md](./docs/04-DESIGN-VLLM-STUDIO.md) | `SDD-04`: `vLLM V1` plugin, FastAPI SSE/WS gateway, `DEMO_REPLAY=true` & React 19 Studio |
 | Stage 4 | [docs/04-DESIGN-CLI-CI-BENCHMARKS.md](./docs/04-DESIGN-CLI-CI-BENCHMARKS.md) | `SDD-05`: CLI, SARIF 2.1.0/HTML reports, `action.yml` & L4/A100 4-arm empirical study |
-| Stage 5 | [docs/05-IMPLEMENTATION-PLAN.md](./docs/05-IMPLEMENTATION-PLAN.md) | Complete feature-to-file-to-test implementation plan, exit gates & INR budget ledger |
+| Stage 5 | [docs/05-IMPLEMENTATION-PLAN.md](./docs/05-IMPLEMENTATION-PLAN.md) | Exhaustive 1-to-1 Bidirectional RTM (`36/36` FRDs, `22/22` Features, exact symbols/tests), file-by-file plan, `GATE-0..7` & INR ledger |
 
 ---
 
