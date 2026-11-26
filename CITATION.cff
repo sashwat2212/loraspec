@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "loraspec: LoRA Subspace Auditor (KnOTS) & Per-Token Top-k MoLoRA Triton Studio"
+message: "If you use loraspec, its Grassmann spectral auditor, KnOTS aligner, or Arrow-SGMV Triton kernel in your research or engineering stack, please cite it as below."
+type: software
+authors:
+  - name: "loraspec contributors"
+repository-code: "https://github.com/sashwat2212/loraspec"
+url: "https://pypi.org/project/loraspec/"
+license: Apache-2.0
+version: "0.1.0"
+date-released: "2026-11-26"
+keywords:
+  - lora
+  - peft
+  - knots
+  - molora
+  - triton
+  - vllm
+  - grassmann
+  - sarif
+abstract: >-
+  Pre-flight Grassmann/SVD LoRA subspace collision and rank-collapse auditor,
+  scalable factorized KnOTS joint-SVD alignment merger, custom @triton.jit
+  per-token Top-k Arrow-SGMV kernel, vLLM V1 plugin, and interactive telemetry
+  studio.

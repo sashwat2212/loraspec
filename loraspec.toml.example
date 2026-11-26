@@ -1,0 +1,35 @@
+[project]
+fail_on = "high"                     # critical | high | medium | low
+default_backend = "auto"             # auto | triton_cuda | torch_mps | torch_cpu | pure_python
+
+[audit]
+rank_collapse_ratio = 0.20           # Flag HIGH if mean r_eff / r < 0.20
+top1_energy_threshold = 0.85         # Flag HIGH if >= 30% layers exceed 85% energy in sigma_1
+spectral_spike_multiplier = 5.0      # Flag HIGH if ||dW||_2 > 5x layer median
+collision_high_chordal = 0.45        # Grassmann chordal similarity threshold (HIGH)
+collision_crit_chordal = 0.70        # Grassmann chordal similarity threshold (CRITICAL)
+sign_conflict_threshold = 0.35       # Directional sign conflict trigger
+require_all_linear = true            # Warn on attention-only LoRAs omitting MLP layers
+
+[knots]
+default_method = "knots_ties"        # knots_ties | knots_dare_ties | knots_linear
+ties_density = 0.50
+dare_drop_rate = 0.20
+min_energy_retention = 0.90
+rng_seed = 42
+
+[molora]
+top_k = 2
+router_temperature = 1.0
+use_gks = false
+
+[budget]
+max_cost_inr = 2500.0                # Hard INR ceiling (<= 3000 incl. 18% GST)
+smoke_cap_inr = 10.0                 # Mandatory --smoke dry-run limit
+l4_rate_inr_per_hr = 57.82           # Rs 49/hr + 18% GST
+a100_rate_inr_per_hr = 223.02        # Rs 189/hr + 18% GST
+
+[studio]
+host = "127.0.0.1"
+port = 8000
+demo_replay = true

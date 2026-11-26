@@ -1,0 +1,88 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loraspec"
+version = "0.1.0"
+description = "LoRA Subspace Auditor (KnOTS) & Per-Token Top-k MoLoRA Triton Studio — pre-flight Grassmann/SVD collision SARIF auditor, factorized KnOTS alignment merger, and @triton.jit Arrow-SGMV multi-LoRA serving engine."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [{ name = "loraspec contributors" }]
+keywords = [
+    "lora",
+    "peft",
+    "knots",
+    "molora",
+    "triton",
+    "vllm",
+    "svd",
+    "grassmann",
+    "sarif",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "pydantic>=2.7,<3",
+    "typer>=0.12",
+    "rich>=13.7",
+    "httpx>=0.27",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+]
+
+# Stage 6 optional extras ([spectral], [kernels], [serving], [studio]) are added in M1-M3
+# when locking online; Stage 5 core runs 100% zero-dependency on pure-Python CPU.
+
+[project.urls]
+Homepage = "https://github.com/sashwat2212/loraspec"
+Repository = "https://github.com/sashwat2212/loraspec"
+Documentation = "https://github.com/sashwat2212/loraspec/tree/main/docs"
+Issues = "https://github.com/sashwat2212/loraspec/issues"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+loraspec = "loraspec.cli.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/loraspec"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["docs", "benchmarks/planted_collisions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "cuda: GPU tests that require an NVIDIA CUDA + Triton environment",
+]
