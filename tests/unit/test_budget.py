@@ -64,3 +64,7 @@ async def test_release_and_validation_errors() -> None:
         await guard.reserve_or_raise("unknown_gpu", 10.0)
     with pytest.raises(ConfigError):
         await guard.reserve_or_raise("local_cpu", -5.0)
+    with pytest.raises(ConfigError):
+        await guard.reconcile(res2, 10.0)  # Double reconcile rejected
+    with pytest.raises(ConfigError):
+        GpuBudgetGuard(max_cost_inr=float("nan"))

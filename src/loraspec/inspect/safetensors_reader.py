@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import array
+import importlib
 import json
 import math
 import re
 import struct
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -36,6 +39,25 @@ _LORA_KEY_RE = re.compile(
 )
 
 
+def _optional_numpy() -> Any | None:
+    try:
+        return importlib.import_module("numpy")
+    except ImportError:
+        return None
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _is_int_strict(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 @dataclass(frozen=True)
 class SafetensorsTensorMeta:
     name: str
@@ -61,6 +83,15 @@ class LoadedLoRAWeights:
 
 def _decode_bf16_buffer(raw: bytes) -> list[float]:
     count = len(raw) // 2
+    if count == 0:
+        return []
+    if sys.byteorder == "little":
+        u16_arr = array.array("H")
+        u16_arr.frombytes(raw)
+        u32_arr = array.array("I", (u << 16 for u in u16_arr))
+        f32_arr = array.array("f")
+        f32_arr.frombytes(u32_arr.tobytes())
+        return f32_arr.tolist()
     values: list[float] = []
     for i in range(count):
         (u16,) = struct.unpack_from("<H", raw, i * 2)
@@ -104,13 +135,32 @@ def decode_tensor_2d(
     if len(raw) != n_bytes:
         raise AdapterParseError(f"Truncated tensor payload for '{meta.name}' in {path}.")
 
+    np_mod = _optional_numpy()
+    if np_mod is not None and rows > 0 and cols > 0:
+        if meta.dtype == "F32":
+            arr = np_mod.frombuffer(raw, dtype="<f4").astype(np_mod.float64)
+        elif meta.dtype == "F16":
+            arr = np_mod.frombuffer(raw, dtype="<f2").astype(np_mod.float64)
+        elif meta.dtype == "F64":
+            arr = np_mod.frombuffer(raw, dtype="<f8")
+        else:
+            u32 = np_mod.frombuffer(raw, dtype="<u2").astype(np_mod.uint32) << 16
+            arr = u32.view("<f4").astype(np_mod.float64)
+        if int(arr.size) != rows * cols:
+            raise AdapterParseError(
+                f"Decoded element count mismatch for '{meta.name}': "
+                f"expected {rows * cols}, got {int(arr.size)}."
+            )
+        reshaped: Any = arr.reshape((rows, cols))
+        return cast(list[list[float]], reshaped.tolist())
+
     flat: list[float]
     if meta.dtype == "F32":
-        flat = [float(v[0]) for v in struct.iter_unpack("<f", raw)]
+        flat = list(struct.unpack(f"<{len(raw) // 4}f", raw)) if raw else []
     elif meta.dtype == "F16":
-        flat = [float(v[0]) for v in struct.iter_unpack("<e", raw)]
+        flat = list(struct.unpack(f"<{len(raw) // 2}e", raw)) if raw else []
     elif meta.dtype == "F64":
-        flat = [float(v[0]) for v in struct.iter_unpack("<d", raw)]
+        flat = list(struct.unpack(f"<{len(raw) // 8}d", raw)) if raw else []
     elif meta.dtype == "BF16":
         flat = _decode_bf16_buffer(raw)
     else:
@@ -162,6 +212,10 @@ def parse_safetensors_header(path: Path) -> LoadedSafetensors:
 
     for key, val in header_map.items():
         if key == "__metadata__":
+            if val is not None and not isinstance(val, dict):
+                raise AdapterParseError(
+                    f"Malformed __metadata__ entry in {path}: expected JSON object."
+                )
             if isinstance(val, dict):
                 meta_map = cast(dict[Any, Any], val)
                 metadata = {str(mk): str(mv) for mk, mv in meta_map.items()}
@@ -221,6 +275,21 @@ def parse_safetensors_header(path: Path) -> LoadedSafetensors:
             shape=tuple(shape),
             data_offsets=(begin, end),
         )
+
+    # Reject overlapping non-empty tensor byte slices (safetensors spec requirement)
+    non_empty_spans = sorted(
+        (t.data_offsets[0], t.data_offsets[1], t.name)
+        for t in tensors.values()
+        if t.data_offsets[1] > t.data_offsets[0]
+    )
+    for idx in range(1, len(non_empty_spans)):
+        prev_begin, prev_end, prev_name = non_empty_spans[idx - 1]
+        cur_begin, cur_end, cur_name = non_empty_spans[idx]
+        if cur_begin < prev_end:
+            raise AdapterParseError(
+                f"Overlapping data_offsets between '{prev_name}' [{prev_begin}, {prev_end}] "
+                f"and '{cur_name}' [{cur_begin}, {cur_end}] in {path}"
+            )
 
     return LoadedSafetensors(
         path=path,
@@ -320,7 +389,12 @@ def _resolve_adapter_paths(path: Path) -> tuple[Path, Path, Path | None, Adapter
     raise AdapterParseError(f"No .safetensors adapter weights found in directory: {path}")
 
 
-def load_peft_adapter(path: Path, *, adapter_id: str | None = None) -> LoadedLoRAWeights:
+def load_peft_adapter(
+    path: Path,
+    *,
+    adapter_id: str | None = None,
+    adapter_name: str | None = None,
+) -> LoadedLoRAWeights:
     """Safely load a LoRA adapter directory or `.safetensors` file into canonical schemas."""
     root_path, weights_path, config_path, adapter_format = _resolve_adapter_paths(path)
     st = parse_safetensors_header(weights_path)
@@ -336,19 +410,41 @@ def load_peft_adapter(path: Path, *, adapter_id: str | None = None) -> LoadedLoR
             raise AdapterParseError(f"adapter_config.json must be a JSON object: {config_path}")
         cfg_data = cast(dict[str, Any], loaded_cfg)
 
-    grouped: dict[str, dict[str, SafetensorsTensorMeta]] = {}
+    by_adapter: dict[str, dict[str, dict[str, SafetensorsTensorMeta]]] = {}
     for tname, tmeta in st.tensors.items():
         match = _LORA_KEY_RE.match(tname)
         if match is None:
             continue
         prefix = match.group("prefix").rstrip(".")
         side = match.group("side")
-        layer_id = prefix or tname
-        bucket = grouped.setdefault(layer_id, {})
-        bucket[side] = tmeta
+        adapter_tag = match.group("adapter") or "default"
+        layer_id = prefix or "__root__"
+        adapter_bucket = by_adapter.setdefault(adapter_tag, {})
+        layer_bucket = adapter_bucket.setdefault(layer_id, {})
+        layer_bucket[side] = tmeta
 
-    if not grouped:
+    if not by_adapter:
         raise AdapterParseError(f"No paired lora_A / lora_B tensors found inside {weights_path}.")
+
+    selected_adapter_tag: str
+    if adapter_name is not None:
+        if adapter_name not in by_adapter:
+            raise AdapterParseError(
+                f"Requested adapter_name='{adapter_name}' not found in {weights_path}; "
+                f"available: {sorted(by_adapter)}."
+            )
+        selected_adapter_tag = adapter_name
+    elif len(by_adapter) == 1:
+        selected_adapter_tag = next(iter(by_adapter))
+    elif "default" in by_adapter:
+        selected_adapter_tag = "default"
+    else:
+        raise AdapterParseError(
+            f"Multiple adapter namespaces {sorted(by_adapter)} found in {weights_path}; "
+            "specify adapter_name explicitly."
+        )
+
+    grouped = by_adapter[selected_adapter_tag]
 
     layer_specs: list[LoRALayerSpec] = []
     layer_factors: dict[str, tuple[list[list[float]], list[list[float]]]] = {}
@@ -373,6 +469,11 @@ def load_peft_adapter(path: Path, *, adapter_id: str | None = None) -> LoadedLoR
         if rank_a != rank_b or rank_a <= 0:
             raise AdapterParseError(
                 f"Rank mismatch in '{layer_name}': lora_A={meta_a.shape}, lora_B={meta_b.shape}."
+            )
+        if in_features <= 0 or out_features <= 0:
+            raise AdapterParseError(
+                f"Invalid empty LoRA feature dimension in '{layer_name}': "
+                f"lora_A={meta_a.shape}, lora_B={meta_b.shape}."
             )
 
         mat_a = decode_tensor_2d(weights_path, meta_a, st.payload_offset)
@@ -399,11 +500,52 @@ def load_peft_adapter(path: Path, *, adapter_id: str | None = None) -> LoadedLoR
         layer_factors[layer_name] = (mat_a, mat_b)
 
     cfg_rank = cfg_data.get("r")
-    rank = int(cfg_rank) if isinstance(cfg_rank, int) and cfg_rank > 0 else inferred_ranks[0]
+    if "r" in cfg_data and cfg_rank is not None:
+        if not _is_int_strict(cfg_rank) or cfg_rank <= 0:
+            raise AdapterParseError(
+                f"Invalid 'r' in {config_path}: expected positive integer, got {cfg_rank!r}."
+            )
+        rank = int(cfg_rank)
+    else:
+        rank = inferred_ranks[0]
+
     cfg_alpha = cfg_data.get("lora_alpha")
-    lora_alpha = float(cfg_alpha) if isinstance(cfg_alpha, (int, float)) else float(rank)
+    config_alpha_missing = config_path is not None and (
+        "lora_alpha" not in cfg_data or cfg_alpha is None
+    )
+    if "lora_alpha" in cfg_data and cfg_alpha is not None:
+        if not _is_finite_number(cfg_alpha):
+            raise AdapterParseError(
+                f"Invalid 'lora_alpha' in {config_path}: expected finite number, got {cfg_alpha!r}."
+            )
+        lora_alpha = float(cfg_alpha)
+    else:
+        lora_alpha = float(rank)
+
+    raw_dropout = cfg_data.get("lora_dropout", 0.0)
+    if raw_dropout is None:
+        lora_dropout = 0.0
+    elif _is_finite_number(raw_dropout) and float(raw_dropout) >= 0.0:
+        lora_dropout = float(raw_dropout)
+    else:
+        raise AdapterParseError(
+            f"Invalid 'lora_dropout' in {config_path}: expected non-negative number, "
+            f"got {raw_dropout!r}."
+        )
+
     use_rslora = bool(cfg_data.get("use_rslora", False))
     scaling = lora_alpha / math.sqrt(float(rank)) if use_rslora else lora_alpha / float(rank)
+
+    has_rank_pattern = isinstance(cfg_data.get("rank_pattern"), dict) and bool(
+        cfg_data.get("rank_pattern")
+    )
+    config_rank_mismatch = (
+        config_path is not None
+        and "r" in cfg_data
+        and cfg_rank is not None
+        and not has_rank_pattern
+        and any(r_layer != rank for r_layer in inferred_ranks)
+    )
 
     raw_targets: Any = cfg_data.get("target_modules", [])
     if isinstance(raw_targets, list):
@@ -426,7 +568,7 @@ def load_peft_adapter(path: Path, *, adapter_id: str | None = None) -> LoadedLoR
         rank=rank,
         lora_alpha=lora_alpha,
         scaling=scaling,
-        lora_dropout=float(cfg_data.get("lora_dropout", 0.0)),
+        lora_dropout=lora_dropout,
         use_rslora=use_rslora,
         use_dora=bool(cfg_data.get("use_dora", False)),
         bias=str(cfg_data.get("bias", "none")),
@@ -437,6 +579,10 @@ def load_peft_adapter(path: Path, *, adapter_id: str | None = None) -> LoadedLoR
         metadata={
             "safetensors_metadata": st.metadata,
             "config_missing": config_path is None,
+            "config_alpha_missing": config_alpha_missing,
+            "config_rank_mismatch": config_rank_mismatch,
+            "selected_adapter_namespace": selected_adapter_tag,
+            "available_adapter_namespaces": sorted(by_adapter),
         },
     )
     return LoadedLoRAWeights(spec=spec, layer_factors=layer_factors)

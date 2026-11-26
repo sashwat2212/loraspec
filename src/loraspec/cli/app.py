@@ -10,6 +10,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape as rich_escape
 from rich.table import Table
 
 from loraspec import __version__
@@ -24,6 +25,7 @@ from loraspec.core.errors import (
     EXIT_AUDIT_FAIL,
     EXIT_CONFIG_ERROR,
     EXIT_PASS,
+    ConfigError,
     LoraspecError,
 )
 from loraspec.core.manifest import build_run_manifest, detect_accelerator_backend
@@ -132,20 +134,35 @@ def inspect(
         typer.echo(spec.model_dump_json(indent=2))
         return
 
-    table = Table(title=f"LoRAAdapterSpec: {spec.adapter_id}")
+    table = Table(title=f"LoRAAdapterSpec: {rich_escape(spec.adapter_id)}")
     table.add_column("Field", style="bold")
     table.add_column("Value")
-    table.add_row("Adapter Format", spec.adapter_format.value)
-    table.add_row("Base Model", spec.base_model_name_or_path or "unspecified")
+    table.add_row("Adapter Format", rich_escape(spec.adapter_format.value))
+    table.add_row("Base Model", rich_escape(spec.base_model_name_or_path or "unspecified"))
     table.add_row(
         "Rank / Alpha", f"r={spec.rank}, alpha={spec.lora_alpha} (scale={spec.scaling:.4f})"
     )
     table.add_row("rsLoRA / DoRA", f"rslora={spec.use_rslora}, dora={spec.use_dora}")
-    table.add_row("Target Modules", ", ".join(spec.target_modules) or "-")
+    table.add_row("Target Modules", rich_escape(", ".join(spec.target_modules) or "-"))
     table.add_row("Paired Layers", str(len(spec.layers)))
     table.add_row("Total LoRA Params", f"{spec.total_lora_params:,}")
     table.add_row("Weights SHA-256", spec.weights_sha256[:16] + "...")
     console.print(table)
+
+
+def _parse_audit_tiers(raw_tiers: str) -> set[int]:
+    parts = [p.strip() for p in raw_tiers.split(",") if p.strip()]
+    if not parts:
+        raise ConfigError("At least one audit tier must be specified (e.g. '0' or '0,1').")
+    parsed: set[int] = set()
+    for part in parts:
+        if part not in {"0", "1"}:
+            raise ConfigError(
+                f"Unsupported audit tier '{part}' in --tiers='{raw_tiers}'. "
+                "Supported Tier 0-1 values: 0, 1."
+            )
+        parsed.add(int(part))
+    return parsed
 
 
 @app.command()
@@ -157,6 +174,9 @@ def audit(
     config: Annotated[
         Path | None, typer.Option("--config", help="Optional path to loraspec.toml.")
     ] = None,
+    tiers: Annotated[
+        str, typer.Option("--tiers", help="Audit tiers to run (e.g. '0' or '0,1').")
+    ] = "0,1",
     fail_on: Annotated[
         Severity | None,
         typer.Option("--fail-on", help="Severity threshold (critical|high|medium|low)."),
@@ -173,25 +193,36 @@ def audit(
     """Run $0 CPU spectral rank-collapse & pairwise Grassmann subspace collision audit."""
     try:
         cfg = load_config(config)
+        parsed_tiers = _parse_audit_tiers(tiers)
         threshold = fail_on if fail_on is not None else cfg.project.fail_on
 
         loaded_list: list[LoadedLoRAWeights] = []
-        seen_ids: dict[str, int] = {}
-        for idx, p in enumerate(paths):
+        used_ids: set[str] = set()
+        for p in paths:
             raw = load_peft_adapter(p)
             base_id = raw.spec.adapter_id
-            if base_id in seen_ids:
-                seen_ids[base_id] += 1
-                unique_id = f"{base_id}_{idx}"
-                raw = load_peft_adapter(p, adapter_id=unique_id)
-            else:
-                seen_ids[base_id] = 1
+            unique_id = base_id
+            if unique_id in used_ids:
+                suffix = 1
+                while f"{base_id}_{suffix}" in used_ids:
+                    suffix += 1
+                unique_id = f"{base_id}_{suffix}"
+                raw = LoadedLoRAWeights(
+                    spec=raw.spec.model_copy(update={"adapter_id": unique_id}),
+                    layer_factors=raw.layer_factors,
+                )
+            used_ids.add(unique_id)
             loaded_list.append(raw)
     except LoraspecError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=exc.exit_code) from exc
 
-    layer_metrics, collisions, findings = run_spectral_and_collision_audit(loaded_list, cfg.audit)
+    run_tier1 = 1 in parsed_tiers
+    layer_metrics, collisions, findings = run_spectral_and_collision_audit(
+        loaded_list,
+        cfg.audit,
+        run_tier1=run_tier1,
+    )
     risk_score = compute_merge_risk_score(
         findings=findings,
         layer_metrics=layer_metrics,
@@ -219,16 +250,20 @@ def audit(
         recommendations=recommendations,
     )
 
-    if out_dir is not None:
-        write_report_json(report_obj, out_dir / "report.json")
-        write_manifest_json(manifest, out_dir / "manifest.json")
-    if sarif is not None:
-        write_sarif(report_obj, sarif)
+    try:
+        if out_dir is not None:
+            write_report_json(report_obj, out_dir / "report.json")
+            write_manifest_json(manifest, out_dir / "manifest.json")
+        if sarif is not None:
+            write_sarif(report_obj, sarif)
+    except OSError as exc:
+        typer.echo(f"Error writing output artifact: {exc}", err=True)
+        raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
 
     rec_str = ", ".join(r.value for r in recommendations)
     console.print(
         f"[bold]Grade {grade}[/bold] | MergeRiskScore={risk_score:.2f}/100.0 | "
-        f"Adapters={len(loaded_list)} | Findings={len(findings)} | Policy={rec_str}"
+        f"Adapters={len(loaded_list)} | Findings={len(findings)} | Policy={rich_escape(rec_str)}"
     )
 
     if findings:
@@ -243,7 +278,12 @@ def audit(
                 if (f.file_path and f.line_number)
                 else (f.file_path or "-")
             )
-            ftable.add_row(f.rule_id, f.severity.value.upper(), loc, f.title)
+            ftable.add_row(
+                rich_escape(f.rule_id),
+                rich_escape(f.severity.value.upper()),
+                rich_escape(loc),
+                rich_escape(f.title),
+            )
         console.print(ftable)
 
     if meets_fail_threshold(findings, threshold):
@@ -272,12 +312,16 @@ def report(
         typer.echo(f"Error: Invalid AuditReport JSON '{report_json}': {exc}", err=True)
         raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
 
-    if sarif is not None:
-        write_sarif(loaded, sarif)
-        typer.echo(f"Wrote SARIF 2.1.0 report to {sarif}")
-    if json_out is not None:
-        write_report_json(loaded, json_out)
-        typer.echo(f"Wrote AuditReport JSON to {json_out}")
+    try:
+        if sarif is not None:
+            write_sarif(loaded, sarif)
+            typer.echo(f"Wrote SARIF 2.1.0 report to {sarif}")
+        if json_out is not None:
+            write_report_json(loaded, json_out)
+            typer.echo(f"Wrote AuditReport JSON to {json_out}")
+    except OSError as exc:
+        typer.echo(f"Error writing output artifact: {exc}", err=True)
+        raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
     if sarif is None and json_out is None:
         adapter_names = ", ".join(a.adapter_id for a in loaded.adapters) or "none"
         typer.echo(

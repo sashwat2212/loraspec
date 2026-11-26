@@ -186,3 +186,103 @@ def test_grade_boundaries_zero_alpha_and_disjoint_layers(
     )
     assert dis_cols == []
     assert not any(f.rule_id == "RULE-SPEC-004" for f in dis_findings)
+
+
+def test_tiny_norm_non_dead_unsupported_peft_and_rank_mismatch(tmp_path: Path) -> None:
+    from loraspec.inspect.safetensors_reader import write_safetensors
+
+    # 1. Tiny non-zero norm (4e-9 > 1e-12) must NOT round to 0.0 and trigger RULE-SPEC-001
+    tiny_dir = tmp_path / "tiny_nonzero"
+    tiny_dir.mkdir()
+    (tiny_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "peft_type": "LORA",
+                "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+                "r": 2,
+                "lora_alpha": 2.0,
+                "target_modules": ["q_proj", "gate_proj"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        tiny_dir / "adapter_model.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[4e-9, 0.0], [0.0, 0.0]], "F32"),
+            "layer0.gate_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.gate_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+        },
+    )
+    m_tiny, _, f_tiny = run_spectral_and_collision_audit(
+        [load_peft_adapter(tiny_dir)], AuditConfig()
+    )
+    assert m_tiny[1].frobenius_norm > 1e-12
+    assert not any(f.rule_id == "RULE-SPEC-001" for f in f_tiny)
+
+    # 2. Unsupported peft_type + missing lora_alpha + config rank mismatch -> RULE-CONF-002
+    bad_cfg_dir = tmp_path / "bad_cfg"
+    bad_cfg_dir.mkdir()
+    (bad_cfg_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "peft_type": "IA3",
+                "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+                "r": 8,
+                "target_modules": ["q_proj", "gate_proj"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        bad_cfg_dir / "adapter_model.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+        },
+    )
+    _, _, f_bad_cfg = run_spectral_and_collision_audit(
+        [load_peft_adapter(bad_cfg_dir)], AuditConfig(), run_tier1=False
+    )
+    conf_002_titles = [f.title for f in f_bad_cfg if f.rule_id == "RULE-CONF-002"]
+    assert len(conf_002_titles) == 3
+
+    # 3. RULE-CONF-001 file_path points to conflicting config even with raw adapter in middle
+    raw_mid = tmp_path / "raw_mid"
+    raw_mid.mkdir()
+    write_safetensors(
+        raw_mid / "adapter_model.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+        },
+    )
+    llama_dir = tmp_path / "llama_end"
+    llama_dir.mkdir()
+    (llama_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "peft_type": "LORA",
+                "base_model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
+                "r": 2,
+                "lora_alpha": 2.0,
+                "target_modules": ["q_proj", "gate_proj"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        llama_dir / "adapter_model.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+        },
+    )
+    _, _, f_three = run_spectral_and_collision_audit(
+        [load_peft_adapter(tiny_dir), load_peft_adapter(raw_mid), load_peft_adapter(llama_dir)],
+        AuditConfig(),
+        run_tier1=False,
+    )
+    c001 = [f for f in f_three if f.rule_id == "RULE-CONF-001"]
+    assert c001 and c001[0].file_path is not None and "llama_end" in c001[0].file_path

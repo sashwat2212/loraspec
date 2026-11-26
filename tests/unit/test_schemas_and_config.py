@@ -43,6 +43,14 @@ def test_invalid_config_rejects_unknown_fields(tmp_path: Path) -> None:
     with pytest.raises(ConfigError):
         load_config(syntax_bad)
 
+    inverted_thresh = tmp_path / "inverted.toml"
+    inverted_thresh.write_text(
+        "[audit]\ncollision_high_chordal = 0.80\ncollision_crit_chordal = 0.40\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(inverted_thresh)
+
 
 def test_meets_fail_threshold() -> None:
     findings = [

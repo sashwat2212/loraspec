@@ -6,14 +6,14 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from loraspec.core.errors import ConfigError
 from loraspec.core.schemas import Severity
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class ProjectConfig(_StrictModel):
@@ -31,6 +31,15 @@ class AuditConfig(_StrictModel):
     collision_crit_chordal: float = Field(default=0.70, ge=0.0, le=1.0)
     sign_conflict_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
     require_all_linear: bool = True
+
+    @model_validator(mode="after")
+    def _validate_collision_thresholds(self) -> AuditConfig:
+        if self.collision_crit_chordal < self.collision_high_chordal:
+            raise ValueError(
+                "collision_crit_chordal must be >= collision_high_chordal "
+                f"({self.collision_crit_chordal} < {self.collision_high_chordal})."
+            )
+        return self
 
 
 class KnotsConfig(_StrictModel):

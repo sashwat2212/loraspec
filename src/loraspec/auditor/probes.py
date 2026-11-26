@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from statistics import median
 
 from loraspec.core.config import AuditConfig
@@ -59,23 +60,79 @@ def run_config_probes(
                     ),
                 )
             )
-        elif spec.lora_alpha <= 0.0:
-            findings.append(
-                AuditFinding(
-                    rule_id="RULE-CONF-002",
-                    title="Non-positive LoRA scaling alpha",
-                    severity=Severity.HIGH,
-                    tier=0,
-                    source="config_probe",
-                    file_path=_rel_path(spec, use_config=True),
-                    line_number=1,
-                    evidence=(
-                        f"Adapter '{spec.adapter_id}' sets lora_alpha={spec.lora_alpha} "
-                        f"(scaling={spec.scaling:.4f})."
-                    ),
-                    remediation="Set lora_alpha > 0 in adapter_config.json.",
+        else:
+            if spec.peft_type.upper() != "LORA":
+                findings.append(
+                    AuditFinding(
+                        rule_id="RULE-CONF-002",
+                        title="Unsupported PEFT adapter type",
+                        severity=Severity.HIGH,
+                        tier=0,
+                        source="config_probe",
+                        file_path=_rel_path(spec, use_config=True),
+                        line_number=1,
+                        evidence=(
+                            f"Adapter '{spec.adapter_id}' declares peft_type='{spec.peft_type}'; "
+                            "only 'LORA' is supported for spectral auditing and Arrow-SGMV."
+                        ),
+                        remediation="Convert or export adapter weights using peft_type='LORA'.",
+                    )
                 )
-            )
+            if spec.metadata.get("config_alpha_missing"):
+                findings.append(
+                    AuditFinding(
+                        rule_id="RULE-CONF-002",
+                        title="Missing lora_alpha in adapter_config.json",
+                        severity=Severity.HIGH,
+                        tier=0,
+                        source="config_probe",
+                        file_path=_rel_path(spec, use_config=True),
+                        line_number=1,
+                        evidence=(
+                            f"Adapter '{spec.adapter_id}' omits lora_alpha in adapter_config.json."
+                        ),
+                        remediation=(
+                            "Explicitly set positive numeric lora_alpha in adapter_config.json."
+                        ),
+                    )
+                )
+            elif not math.isfinite(spec.lora_alpha) or spec.lora_alpha <= 0.0:
+                findings.append(
+                    AuditFinding(
+                        rule_id="RULE-CONF-002",
+                        title="Non-positive LoRA scaling alpha",
+                        severity=Severity.HIGH,
+                        tier=0,
+                        source="config_probe",
+                        file_path=_rel_path(spec, use_config=True),
+                        line_number=1,
+                        evidence=(
+                            f"Adapter '{spec.adapter_id}' sets lora_alpha={spec.lora_alpha} "
+                            f"(scaling={spec.scaling:.4f})."
+                        ),
+                        remediation="Set lora_alpha > 0 in adapter_config.json.",
+                    )
+                )
+            if spec.metadata.get("config_rank_mismatch"):
+                layer_ranks = sorted({layer.rank for layer in spec.layers})
+                findings.append(
+                    AuditFinding(
+                        rule_id="RULE-CONF-002",
+                        title="Configured rank disagrees with .safetensors tensor dimensions",
+                        severity=Severity.HIGH,
+                        tier=0,
+                        source="config_probe",
+                        file_path=_rel_path(spec, use_config=True),
+                        line_number=1,
+                        evidence=(
+                            f"Adapter '{spec.adapter_id}' configures r={spec.rank} but weights "
+                            f"carry ranks={layer_ranks} without rank_pattern."
+                        ),
+                        remediation=(
+                            "Re-export adapter_config.json with matching r or rank_pattern."
+                        ),
+                    )
+                )
 
         if cfg.require_all_linear:
             modules_present = {layer.module_type for layer in spec.layers} | set(
@@ -103,10 +160,18 @@ def run_config_probes(
                 )
 
     if len(adapters) >= 2:
-        base_models = {
-            a.base_model_name_or_path for a in adapters if a.base_model_name_or_path is not None
-        }
+        with_base: list[tuple[LoRAAdapterSpec, str]] = [
+            (a, a.base_model_name_or_path)
+            for a in adapters
+            if a.base_model_name_or_path is not None
+        ]
+        base_models = {bm for _, bm in with_base}
         if len(base_models) > 1:
+            primary_base = with_base[0][1]
+            conflicting = next(
+                (a for a, bm in with_base[1:] if bm != primary_base),
+                with_base[0][0],
+            )
             findings.append(
                 AuditFinding(
                     rule_id="RULE-CONF-001",
@@ -114,7 +179,7 @@ def run_config_probes(
                     severity=Severity.CRITICAL,
                     tier=0,
                     source="config_probe",
-                    file_path=_rel_path(adapters[1], use_config=True),
+                    file_path=_rel_path(conflicting, use_config=True),
                     line_number=1,
                     evidence=f"Conflicting base_model_name_or_path values: {sorted(base_models)}.",
                     remediation=(
@@ -178,6 +243,8 @@ def run_config_probes(
 def run_spectral_and_collision_audit(
     loaded: list[LoadedLoRAWeights],
     cfg: AuditConfig,
+    *,
+    run_tier1: bool = True,
 ) -> tuple[
     list[LayerSpectralMetrics],
     list[PairwiseCollisionMetrics],
@@ -186,6 +253,8 @@ def run_spectral_and_collision_audit(
     """Compute factorized QR+SVD health, Grassmann collisions, and emit RULE-* findings."""
     specs = [item.spec for item in loaded]
     findings = run_config_probes(specs, cfg)
+    if not run_tier1:
+        return [], [], findings
 
     all_layer_metrics: list[LayerSpectralMetrics] = []
     factors_by_adapter: dict[str, dict[str, LayerSubspaceFactors]] = {}
@@ -235,8 +304,12 @@ def run_spectral_and_collision_audit(
                 )
             )
 
-        # RULE-SPEC-002: Rank Collapse
-        valid_ge4 = [m for m in adapter_metrics if m.rank >= 4 and not m.has_non_finite]
+        # RULE-SPEC-002: Rank Collapse (exclude dead zero layers already caught by RULE-SPEC-001)
+        valid_ge4 = [
+            m
+            for m in adapter_metrics
+            if m.rank >= 4 and not m.has_non_finite and m.frobenius_norm > 1e-12
+        ]
         if valid_ge4:
             mean_util = sum(m.rank_utilization for m in valid_ge4) / float(len(valid_ge4))
             high_top1_frac = sum(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -44,15 +45,20 @@ class GpuBudgetGuard:
         smoke_cap_inr: float = 10.0,
         rate_table_inr_per_hr: dict[str, float] | None = None,
     ) -> None:
-        if max_cost_inr < 0.0:
-            raise ConfigError("max_cost_inr must be non-negative.")
-        if smoke and smoke_cap_inr <= 0.0:
-            raise ConfigError("smoke_cap_inr must be positive.")
+        if not math.isfinite(max_cost_inr) or max_cost_inr < 0.0:
+            raise ConfigError("max_cost_inr must be finite and non-negative.")
+        if not math.isfinite(smoke_cap_inr) or (smoke and smoke_cap_inr <= 0.0):
+            raise ConfigError("smoke_cap_inr must be finite and positive when --smoke is set.")
 
         self.effective_cap_inr: float = min(max_cost_inr, smoke_cap_inr) if smoke else max_cost_inr
         self.smoke: bool = smoke
         self._rates: dict[str, float] = dict(DEFAULT_RATE_TABLE_INR_PER_HR)
         if rate_table_inr_per_hr is not None:
+            for profile, rate in rate_table_inr_per_hr.items():
+                if not math.isfinite(rate) or rate < 0.0:
+                    raise ConfigError(
+                        f"Hourly rate for '{profile}' must be finite and non-negative, got {rate}."
+                    )
             self._rates.update(rate_table_inr_per_hr)
 
         self._lock = asyncio.Lock()
@@ -83,8 +89,8 @@ class GpuBudgetGuard:
         estimated_seconds: float,
     ) -> BudgetReservation:
         """Atomically check projected GPU spend against cap before launching a GPU step."""
-        if estimated_seconds < 0.0:
-            raise ConfigError("estimated_seconds must be non-negative.")
+        if not math.isfinite(estimated_seconds) or estimated_seconds < 0.0:
+            raise ConfigError("estimated_seconds must be finite and non-negative.")
 
         rate = self.hourly_rate(hardware)
         projected = rate * (estimated_seconds / 3600.0)
@@ -110,18 +116,20 @@ class GpuBudgetGuard:
 
     async def reconcile(self, reservation: BudgetReservation, actual_seconds: float) -> float:
         """Release reservation and record exact actual elapsed GPU cost."""
-        if actual_seconds < 0.0:
-            raise ConfigError("actual_seconds must be non-negative.")
+        if not math.isfinite(actual_seconds) or actual_seconds < 0.0:
+            raise ConfigError("actual_seconds must be finite and non-negative.")
 
         rate = self.hourly_rate(reservation.hardware)
         actual_cost = rate * (actual_seconds / 3600.0)
 
         async with self._lock:
             active = self._active.pop(reservation.reservation_id, None)
-            if active is not None:
-                self._reserved_cost_inr = max(
-                    0.0, self._reserved_cost_inr - active.reserved_cost_inr
+            if active is None:
+                raise ConfigError(
+                    f"Reservation {reservation.reservation_id} is no longer active "
+                    "(already reconciled or released)."
                 )
+            self._reserved_cost_inr = max(0.0, self._reserved_cost_inr - active.reserved_cost_inr)
             self._committed_cost_inr += actual_cost
             self._committed_seconds += actual_seconds
             return actual_cost

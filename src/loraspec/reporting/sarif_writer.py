@@ -34,28 +34,31 @@ def _find_git_root(start: Path) -> Path | None:
 def _normalize_uri(
     file_path: str | None,
     root_paths: list[Path],
-    git_root: Path | None,
+    fallback_git_root: Path | None,
 ) -> str:
     if not file_path:
-        if git_root is not None and root_paths:
-            try:
-                rel_dir = root_paths[0].resolve().relative_to(git_root)
-                rel_str = rel_dir.as_posix()
-                return rel_str if rel_str else "."
-            except ValueError:
-                pass
+        for root in root_paths:
+            g_root = _find_git_root(root) or fallback_git_root
+            if g_root is not None:
+                try:
+                    rel_dir = root.resolve().relative_to(g_root)
+                    rel_str = rel_dir.as_posix()
+                    return rel_str if rel_str else "."
+                except ValueError:
+                    continue
         return "."
 
-    raw = file_path.strip()
+    raw = file_path.strip().replace("\\", "/")
     if not raw or raw in {".", "./"}:
         return "."
 
     candidate = Path(raw)
     if candidate.is_absolute():
         resolved = candidate.resolve()
-        if git_root is not None:
+        local_git_root = _find_git_root(resolved) or fallback_git_root
+        if local_git_root is not None:
             try:
-                return resolved.relative_to(git_root).as_posix()
+                return resolved.relative_to(local_git_root).as_posix()
             except ValueError:
                 pass
         for root in root_paths:
@@ -69,20 +72,24 @@ def _normalize_uri(
     while cleaned.startswith("./"):
         cleaned = cleaned[2:]
     cleaned = cleaned.lstrip("/")
-    return cleaned or "."
+    safe_parts = [p for p in cleaned.split("/") if p not in {"", ".", ".."}]
+    return "/".join(safe_parts) or "."
 
 
 def build_sarif_dict(report: AuditReport) -> dict[str, Any]:
     """Build a valid SARIF 2.1.0 dictionary from an AuditReport."""
     root_paths = [spec.root_path for spec in report.adapters]
-    git_root = _find_git_root(root_paths[0]) if root_paths else _find_git_root(Path.cwd())
+    fallback_git_root = next(
+        (g for g in (_find_git_root(p) for p in root_paths) if g is not None),
+        _find_git_root(Path.cwd()),
+    )
 
     rules_by_id: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
 
     for finding in report.findings:
         _register_rule(rules_by_id, finding)
-        uri = _normalize_uri(finding.file_path, root_paths, git_root)
+        uri = _normalize_uri(finding.file_path, root_paths, fallback_git_root)
         region: dict[str, Any] | None = (
             {"startLine": finding.line_number}
             if finding.line_number is not None and finding.line_number >= 1

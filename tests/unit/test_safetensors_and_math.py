@@ -210,3 +210,105 @@ def test_safetensors_structural_and_pairing_edge_cases(tmp_path: Path) -> None:
     parsed = parse_safetensors_header(vec_file)
     with pytest.raises(AdapterParseError, match="2D"):
         decode_tensor_2d(vec_file, parsed.tensors["vec"], parsed.payload_offset)
+
+    # 5. Overlapping data_offsets and malformed __metadata__ rejected
+    ov_hdr = json.dumps(
+        {
+            "a": {"dtype": "F32", "shape": [2, 2], "data_offsets": [0, 16]},
+            "b": {"dtype": "F32", "shape": [2, 2], "data_offsets": [4, 20]},
+        }
+    ).encode("utf-8")
+    overlap_file = tmp_path / "overlap.safetensors"
+    overlap_file.write_bytes(struct.pack("<Q", len(ov_hdr)) + ov_hdr + b"\x00" * 20)
+    with pytest.raises(AdapterParseError, match="Overlapping"):
+        parse_safetensors_header(overlap_file)
+
+    bad_meta_hdr = json.dumps({"__metadata__": "invalid"}).encode("utf-8")
+    bad_meta_file = tmp_path / "bad_meta.safetensors"
+    bad_meta_file.write_bytes(struct.pack("<Q", len(bad_meta_hdr)) + bad_meta_hdr)
+    with pytest.raises(AdapterParseError, match="__metadata__"):
+        parse_safetensors_header(bad_meta_file)
+
+    # 6. Zero-feature-dim tensor rejected safely on load
+    zero_dim = write_safetensors(
+        tmp_path / "zero_dim.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[], []], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+        },
+    )
+    with pytest.raises(AdapterParseError, match="Invalid empty LoRA feature dimension"):
+        load_peft_adapter(zero_dim)
+
+    # 7. Unprefixed lora_A.weight / lora_B.weight pairs cleanly
+    unprefixed = write_safetensors(
+        tmp_path / "unprefixed.safetensors",
+        {
+            "lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "lora_B.weight": ([[2.0, 0.0], [0.0, 3.0]], "F32"),
+        },
+    )
+    loaded_unprefixed = load_peft_adapter(unprefixed)
+    assert len(loaded_unprefixed.spec.layers) == 1
+    assert loaded_unprefixed.spec.layers[0].rank == 2
+
+    # 8. Multi-adapter checkpoint in single .safetensors selects cleanly without cross-pairing
+    multi_st = write_safetensors(
+        tmp_path / "multi.safetensors",
+        {
+            "layer0.q_proj.lora_A.alpha.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_B.alpha.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_A.beta.weight": ([[0.0, 1.0], [1.0, 0.0]], "F32"),
+            "layer0.q_proj.lora_B.beta.weight": ([[0.0, 2.0], [2.0, 0.0]], "F32"),
+        },
+    )
+    with pytest.raises(AdapterParseError, match="Multiple adapter namespaces"):
+        load_peft_adapter(multi_st)
+    loaded_beta = load_peft_adapter(multi_st, adapter_name="beta")
+    assert loaded_beta.spec.layers[0].a_key.endswith(".beta.weight")
+    assert loaded_beta.spec.metadata["available_adapter_namespaces"] == ["alpha", "beta"]
+
+    # 9. Boolean r / lora_alpha in adapter_config.json rejected cleanly
+    bool_dir = tmp_path / "bool_cfg"
+    bool_dir.mkdir()
+    (bool_dir / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "r": True, "lora_alpha": 4.0}),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        bool_dir / "adapter_model.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[1.0, 0.0]], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[1.0], [0.0]], "F32"),
+        },
+    )
+    with pytest.raises(AdapterParseError, match="Invalid 'r'"):
+        load_peft_adapter(bool_dir)
+
+    # 10. Rank-deficient / d < r layer keeps active bases & sigmas strictly aligned
+    small_d_layer = LoRALayerSpec(
+        layer_name="layer0.q_proj",
+        module_type="q_proj",
+        in_features=4,
+        out_features=2,
+        rank=4,
+        dtype="F32",
+        a_key="a",
+        b_key="b",
+        a_shape=(4, 4),
+        b_shape=(2, 4),
+        param_count=24,
+    )
+    a_4x4 = [[1.0 if i == j else 0.0 for j in range(4)] for i in range(4)]
+    b_2x4 = [[2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+    m_small, f_small = compute_layer_spectral_analysis(
+        adapter_id="d_lt_r",
+        layer_spec=small_d_layer,
+        a_mat=a_4x4,
+        b_mat=b_2x4,
+        scaling=1.0,
+    )
+    assert m_small.effective_stable_rank == pytest.approx(1.25, abs=1e-5)
+    assert len(f_small.active_sigmas) == 2
+    assert len(f_small.u_active[0]) == 2
+    assert len(f_small.v_active[0]) == 2

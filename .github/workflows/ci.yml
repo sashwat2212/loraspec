@@ -38,3 +38,11 @@ jobs:
         run: |
           uv run loraspec --version
           uv run loraspec doctor
+
+      - name: Build wheel & out-of-tree /tmp smoke test
+        run: |
+          uv build
+          WHEEL="$(ls dist/loraspec-*.whl | head -n 1)"
+          cd /tmp
+          uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" loraspec --version
+          uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" loraspec doctor

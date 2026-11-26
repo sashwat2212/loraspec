@@ -119,6 +119,55 @@ def test_cli_audit_pass_fail_sarif_and_report(
     bad_rep = runner.invoke(app, ["report", str(tmp_path / "missing.json")])
     assert bad_rep.exit_code == EXIT_CONFIG_ERROR
 
+    # 5. --tiers 0 runs config probes cleanly and skips Tier 1; invalid --tiers exits 2
+    tier0_res = runner.invoke(
+        app,
+        [
+            "audit",
+            str(colliding_conflicting_pair[0]),
+            str(colliding_conflicting_pair[1]),
+            "--tiers",
+            "0",
+        ],
+    )
+    assert tier0_res.exit_code == EXIT_PASS  # Collisions only detected at Tier 1
+
+    bad_tier = runner.invoke(app, ["audit", str(orthogonal_adapter_pair[0]), "--tiers", "9"])
+    assert bad_tier.exit_code == EXIT_CONFIG_ERROR
+
+    # 6. Rich markup escaping & duplicate id deduplication across foo / foo / foo_1
+    d1 = tmp_path / "d1" / "foo_[red]"
+    d2 = tmp_path / "d2" / "foo_[red]"
+    d3 = tmp_path / "d3" / "foo_[red]_1"
+    for d in (d1, d2, d3):
+        d.mkdir(parents=True)
+        for fname in ("adapter_config.json", "adapter_model.safetensors"):
+            (d / fname).write_bytes((orthogonal_adapter_pair[0] / fname).read_bytes())
+
+    insp_markup = runner.invoke(app, ["inspect", str(d1)])
+    assert insp_markup.exit_code == EXIT_PASS
+    assert "foo_[red]" in insp_markup.stdout
+
+    dedup_out = tmp_path / "dedup_out"
+    dedup_res = runner.invoke(
+        app,
+        ["audit", str(d1), str(d2), str(d3), "--out-dir", str(dedup_out), "--fail-on", "critical"],
+    )
+    assert dedup_res.exit_code == EXIT_PASS
+    rep_dedup = AuditReport.model_validate_json(
+        (dedup_out / "report.json").read_text(encoding="utf-8")
+    )
+    assert len({a.adapter_id for a in rep_dedup.adapters}) == 3
+    assert len(rep_dedup.manifest.adapter_sha256s) == 3
+
+    # 7. Unwritable --out-dir (pointing at existing file) exits deterministically with code 2
+    file_target = tmp_path / "not_a_dir.txt"
+    file_target.write_text("x", encoding="utf-8")
+    bad_out = runner.invoke(
+        app, ["audit", str(orthogonal_adapter_pair[0]), "--out-dir", str(file_target)]
+    )
+    assert bad_out.exit_code == EXIT_CONFIG_ERROR
+
 
 def test_cli_stage6_stubs_exit_deterministically(
     orthogonal_adapter_pair: tuple[Path, Path],

@@ -34,7 +34,7 @@ Let $R_{\text{sum}} = \sum_{m=1}^K r_m$ (e.g., $6 \times 16 = 96 \ll 4096$).
    - Exact joint singular values: $\Sigma = \text{diag}(\sigma_1, \dots, \sigma_{R_{\text{sum}}})$
    - Exact aligned right task representations in $V_m^T$-space (for each task $m$):
      $$V_m^T = \Sigma^{-1} W_c^T R_{U,m} A_m \in \mathbb{R}^{R_{\text{sum}} \times d_{\text{in}}}$$
-     *(dropping null singular values $\sigma_i \le 10^{-8} \sigma_1$ safely via pseudoinverse).*
+     *(Numerically conditioned alternative implemented in M1: instead of forming $G = M M^T$ which squares the condition number $\kappa(G) = \kappa(M)^2$, take per-adapter thin QR $A_m^T = Q_{A,m} R_{A,m}$ ($d_{\text{in}} \times r_m$), form the tiny stacked $R_{\text{sum}} \times R_{\text{sum}}$ core $M = [R_{U,1} R_{A,1}^T, \dots, R_{U,K} R_{A,K}^T]$, and take its SVD $M = W_c \Sigma \tilde{V}_{\text{cat}}^T$, giving identical $U = Q_U W_c$, $\Sigma$, and $V_m^T = (\tilde{V}_{\text{cat}, m}^T) Q_{A,m}^T$ directly without squaring singular values or dividing by $\Sigma$!)*
 
 This yields **mathematically exact** `KnOTS` alignment at **500× lower RAM** and **100× faster CPU speed** than naive dense SVD!
 

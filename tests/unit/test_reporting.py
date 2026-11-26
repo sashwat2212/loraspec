@@ -155,3 +155,48 @@ def test_sarif_repo_relative_uris_inside_git_checkout(
         for r in sarif["runs"][0]["results"]
     ]
     assert uris == ["adapters/sql_lora/adapter_model.safetensors", "adapters/sql_lora"]
+
+
+def test_sarif_mixed_external_and_git_repo_adapters(
+    orthogonal_adapter_pair: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    ext_dir = tmp_path / "external_adapter"
+    repo_dir = tmp_path / "repo"
+    (repo_dir / ".git").mkdir(parents=True)
+    in_repo = repo_dir / "models" / "rust_lora"
+    ext_dir.mkdir(parents=True)
+    in_repo.mkdir(parents=True)
+
+    path_a, path_b = orthogonal_adapter_pair
+    for fname in ("adapter_config.json", "adapter_model.safetensors"):
+        (ext_dir / fname).write_bytes((path_a / fname).read_bytes())
+        (in_repo / fname).write_bytes((path_b / fname).read_bytes())
+
+    spec_ext = load_peft_adapter(ext_dir).spec
+    spec_repo = load_peft_adapter(in_repo).spec
+    manifest = build_run_manifest(adapter_sha256s={spec_ext.adapter_id: spec_ext.weights_sha256})
+    report = AuditReport(
+        manifest=manifest,
+        adapters=[spec_ext, spec_repo],
+        grade="D",
+        merge_risk_score=15.0,
+        findings=[
+            AuditFinding(
+                rule_id="RULE-CONF-001",
+                title="Base model mismatch",
+                severity=Severity.CRITICAL,
+                tier=0,
+                source="config_probe",
+                file_path=str(spec_repo.config_path),
+                line_number=1,
+                evidence="mismatch",
+                remediation="align base model",
+            )
+        ],
+    )
+    sarif = build_sarif_dict(report)
+    uri = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"][
+        "uri"
+    ]
+    assert uri == "models/rust_lora/adapter_config.json"

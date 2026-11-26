@@ -21,9 +21,9 @@ Byte Layout of .safetensors:
 
 ### 1.1 Validation Rules (Raising `AdapterParseError` / `EXIT_CONFIG_ERROR = 2`)
 1. `file_size >= 8`, `0 < N <= 104_857_600` (100 MB header ceiling), and `8 + N <= file_size`.
-2. Every non-`__metadata__` tensor entry must declare `dtype` in `{"F32", "F16", "BF16"}` (plus scalar metadata dtypes if present), positive non-empty integer `shape`, and offsets `[begin, end]` satisfying `0 <= begin <= end <= file_size - (8 + N)` and `end - begin == prod(shape) * dtype_bytes`.
-3. **PEFT Layer Key Normalization**: Regex/suffix matcher pairs `...lora_A[.adapter_name].weight` with `...lora_B[.adapter_name].weight`, validating inner rank dimension consistency (`lora_A.shape[0] == lora_B.shape[1] == r`).
-4. **Dtype Decoding**: Decodes `F32` (`<f`), `F16` (`<e`), and `BF16` (`uint16 << 16 -> <f`) cleanly in pure Python (or vectorized `numpy.frombuffer` when `[spectral]` is installed).
+2. Every non-`__metadata__` tensor entry must declare `dtype` in `{"F32", "F16", "BF16"}` (plus scalar metadata dtypes if present), positive non-empty integer `shape`, non-overlapping byte slices `[begin, end]` satisfying `0 <= begin <= end <= file_size - (8 + N)`, and `end - begin == prod(shape) * dtype_bytes`; LoRA factor tensors must have strictly positive rank and feature dimensions (`rank > 0, in_features > 0, out_features > 0`).
+3. **PEFT Layer Key Normalization**: Regex/suffix matcher groups by `(adapter_namespace, layer_prefix)` across `...lora_A[.adapter_name].weight` and `...lora_B[.adapter_name].weight` (including unprefixed `lora_A.weight`/`lora_B.weight`), preventing silent multi-adapter overwrites and validating inner rank dimension consistency (`lora_A.shape[0] == lora_B.shape[1] == r`).
+4. **Dtype Decoding**: Decodes `F32` (`<f`), `F16` (`<e`), and `BF16` (`uint16 << 16 -> <f`) cleanly in pure Python batch unpacking (or vectorized `numpy.frombuffer` when `numpy` is available).
 
 ---
 
@@ -63,7 +63,7 @@ For adapter pair $(a, b)$ at shared layer $\ell$ with orthonormal column bases $
 | Rule ID | Severity | Trigger Condition | Remediation |
 |---|---|---|---|
 | **`RULE-CONF-001`** | `CRITICAL` | Adapters in fleet specify different `base_model_name_or_path` or mismatching layer input/output dimensions. | Re-train or filter adapters targeting identical base model checkpoint. |
-| **`RULE-CONF-002`** | `HIGH` | Missing `adapter_config.json`, `lora_alpha <= 0`, or unsupported `peft_type`. | Fix PEFT `adapter_config.json` and verify non-zero scaling. |
+| **`RULE-CONF-002`** | `HIGH` | Missing `adapter_config.json`, missing/non-positive `lora_alpha`, unsupported `peft_type` (`!= "LORA"`), or `r` disagreeing with `.safetensors` weights (without `rank_pattern`). | Fix PEFT `adapter_config.json` and verify non-zero scaling and matching rank. |
 | **`RULE-CONF-003`** | `HIGH` | `target_modules` omits MLP projections (`gate_proj`, `up_proj`, `down_proj`). | Apply LoRA to all linear layers (attention + MLP) per *LoRA Without Regret*. |
 | **`RULE-CONF-004`** | `MEDIUM` | Heterogeneous `rank` or mixed `use_rslora` values across adapters in fleet. | Use `loraspec merge` (`KnOTS`) or dynamic Top-$k$ `Arrow-SGMV` instead of naive linear merge. |
 | **`RULE-SPEC-001`** | `CRITICAL` | Non-finite (`NaN`/`Inf`) weights or dead zero layer ($\|\Delta W\|_F \le 10^{-12}$). | Quarantine/remove corrupted checkpoint before merge or serving. |
@@ -73,10 +73,10 @@ For adapter pair $(a, b)$ at shared layer $\ell$ with orthonormal column bases $
 
 ### 3.2 `MergeRiskScore (0.0–100.0)` & Grade (`A–F`)
 $$\text{MergeRiskScore} = \min\!\Big(100.0,\; 35 \cdot I_{\text{crit\_conf\_or\_nan}} + 30 \cdot C_{\text{collision}} + 20 \cdot R_{\text{collapse}} + 15 \cdot S_{\text{spike\_or\_config}}\Big)$$
-- **Grade `A`**: `0` CRITICAL/HIGH findings AND `MergeRiskScore == 0.0` (`SAFE_LINEAR_MERGE`).
-- **Grade `B`**: `0` CRITICAL findings, `MergeRiskScore <= 15.0` (only `MEDIUM`/`LOW` advisories like heterogeneous rank).
-- **Grade `C`**: `0` CRITICAL findings, `15.0 < MergeRiskScore <= 35.0` (`USE_KNOTS_ALIGNMENT` advised).
-- **Grade `D`**: `HIGH` collision or rank collapse (`35.0 < MergeRiskScore <= 60.0`; `USE_KNOTS_ALIGNMENT` or `USE_TOP_K_MOLORA` required).
+- **Grade `A`**: `0` findings AND `MergeRiskScore == 0.0` (`SAFE_LINEAR_MERGE`).
+- **Grade `B`**: `0` CRITICAL/HIGH findings AND `MergeRiskScore <= 15.0` (only `MEDIUM`/`LOW`/`INFO` advisories such as heterogeneous rank).
+- **Grade `C`**: `0` CRITICAL/HIGH findings AND `15.0 < MergeRiskScore <= 35.0` (`USE_KNOTS_ALIGNMENT` advised).
+- **Grade `D`**: Any `HIGH` finding (e.g., `HIGH` collision, rank collapse, spectral spike, or missing/unsupported config) OR `35.0 < MergeRiskScore <= 60.0` (`USE_KNOTS_ALIGNMENT` or `USE_TOP_K_MOLORA` required).
 - **Grade `F`**: Any `CRITICAL` finding (`RULE-CONF-001`, `RULE-SPEC-001`, `CRITICAL RULE-SPEC-004`) OR `MergeRiskScore > 60.0`.
 
 ---
