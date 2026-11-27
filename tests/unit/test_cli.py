@@ -207,13 +207,20 @@ def test_cli_stage6_stubs_exit_deterministically(
 ) -> None:
     path_a, _ = orthogonal_adapter_pair
     for args in (
-        ["bench", str(path_a)],
         ["serve"],
         ["replay", "trace.jsonl"],
     ):
         res = runner.invoke(app, args)
         assert res.exit_code == EXIT_CONFIG_ERROR
         assert "Stage 6" in res.stderr
+
+    # `bench` is active in M2: single adapter with default --top-k 2 raises ConfigError (exit 2)
+    single_bench = runner.invoke(app, ["bench", str(path_a)])
+    assert single_bench.exit_code == EXIT_CONFIG_ERROR
+    assert "Stage 6" not in single_bench.stderr
+
+    syn_bench = runner.invoke(app, ["bench", "--synthetic", "--smoke"])
+    assert syn_bench.exit_code == EXIT_PASS, syn_bench.stdout + syn_bench.stderr
 
 
 def test_cli_merge_validation_errors(

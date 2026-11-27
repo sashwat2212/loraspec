@@ -51,3 +51,11 @@ jobs:
           cd /tmp
           uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" loraspec --version
           uvx --from "${GITHUB_WORKSPACE}/${WHEEL}" loraspec doctor
+
+      - name: Verify [kernels] PyTorch CPU M2 router, parity & bench smoke
+        run: |
+          uv pip install --index-url https://download.pytorch.org/whl/cpu torch
+          uv run --no-sync loraspec doctor
+          uv run --no-sync pytest tests/unit/test_arrow_router.py tests/unit/test_kernel_reference_parity.py tests/unit/test_bench_smoke.py tests/integration/test_m2_solidification.py -v
+          uv run --no-sync loraspec bench --synthetic --smoke --out-dir /tmp/ci-bench
+          rm -rf /tmp/ci-bench

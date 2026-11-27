@@ -801,11 +801,9 @@ class AuditReport(BaseModel):
     recommendations: list[DeploymentRecommendation] = Field(
         default_factory=list[DeploymentRecommendation]
     )
-```
 
-#### B. Stage 6 M2–M3 Planned Extension Schemas *(Scheduled for M2/M3 addition in `src/loraspec/core/schemas.py`)*
-```python
-class MoLoRARouteTelemetryBatch(BaseModel):  # Planned: M2 (SDD-03)
+
+class MoLoRARouteTelemetryBatch(BaseModel):
     layer_name: str
     num_tokens: int
     top_k: int
@@ -815,7 +813,7 @@ class MoLoRARouteTelemetryBatch(BaseModel):  # Planned: M2 (SDD-03)
     backend: Literal["triton_cuda", "torch_mps", "torch_cpu", "pure_python"]
 
 
-class KernelBenchmarkPoint(BaseModel):  # Planned: M2 (SDD-03 / SDD-05)
+class KernelBenchmarkPoint(BaseModel):
     hardware_profile: str
     arm_name: Literal[
         "base",
@@ -836,14 +834,16 @@ class KernelBenchmarkPoint(BaseModel):  # Planned: M2 (SDD-03 / SDD-05)
     max_abs_err_vs_ref: float = 0.0
 
 
-class BenchmarkSuiteSummary(BaseModel):  # Planned: M2/M4 (SDD-04 / SDD-05)
+class BenchmarkSuiteSummary(BaseModel):
     manifest: RunManifest
     points: list[KernelBenchmarkPoint]
     speedup_vs_peft_eager: float
     vram_savings_pct: float
     arm_accuracy_pass_at_1: dict[str, float] = Field(default_factory=dict)
+```
 
-
+#### B. Stage 6 M3 Planned Extension Schemas *(Scheduled for M3 addition in `src/loraspec/core/schemas.py`)*
+```python
 class KnOTSPreviewRequest(BaseModel):  # Planned: M3 (SDD-04)
     adapter_paths: list[str]
     method: Literal["knots_ties", "knots_dare_ties", "knots_linear"] = "knots_ties"
