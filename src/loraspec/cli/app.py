@@ -32,6 +32,7 @@ from loraspec.core.errors import (
 from loraspec.core.manifest import build_run_manifest, detect_accelerator_backend
 from loraspec.core.schemas import AuditReport, Severity, meets_fail_threshold
 from loraspec.inspect.safetensors_reader import LoadedLoRAWeights, load_peft_adapter
+from loraspec.kernels.bench import run_kernel_parity_and_roofline_bench
 from loraspec.knots import load_verified_knots_summary, merge_knots_adapters
 from loraspec.knots.aligner import LayerPolicy
 from loraspec.knots.operators import KnotsMethod
@@ -359,7 +360,7 @@ def report(
 def _stage6_stub(command_name: str, milestone: str) -> None:
     typer.echo(
         f"`loraspec {command_name}` is scheduled for Stage 6 ({milestone}). "
-        "Available in M1: `doctor`, `inspect`, `audit`, `merge`, `report`.",
+        "Available in M2: `doctor`, `inspect`, `audit`, `merge`, `bench`, `report`.",
         err=True,
     )
     raise typer.Exit(code=EXIT_CONFIG_ERROR)
@@ -555,15 +556,180 @@ def merge(
         raise typer.Exit(code=EXIT_AUDIT_FAIL)
 
 
+def _parse_int_csv(raw_vals: str, flag_name: str) -> list[int]:
+    parts = [p.strip() for p in raw_vals.split(",") if p.strip()]
+    if not parts:
+        raise ConfigError(f"{flag_name} cannot be empty.")
+    try:
+        return [int(p) for p in parts]
+    except ValueError as exc:
+        raise ConfigError(f"Invalid integer in {flag_name}='{raw_vals}': {exc}") from exc
+
+
+def _parse_str_csv(raw_vals: str, flag_name: str) -> list[str]:
+    parts = [p.strip() for p in raw_vals.split(",") if p.strip()]
+    if not parts:
+        raise ConfigError(f"{flag_name} cannot be empty.")
+    return parts
+
+
 @app.command()
 def bench(
-    paths: Annotated[list[Path], typer.Argument(help="LoRA adapter paths to benchmark.")],
-    top_k: Annotated[int, typer.Option("--top-k", help="Top-k active adapters per token.")] = 2,
-    smoke: Annotated[bool, typer.Option("--smoke", help="Enforce < ₹10 smoke budget cap.")] = True,
+    paths: Annotated[
+        list[Path] | None, typer.Argument(help="LoRA adapter paths to benchmark.")
+    ] = None,
+    synthetic: Annotated[
+        bool, typer.Option("--synthetic", help="Benchmark synthetic mixed-rank experts.")
+    ] = False,
+    top_k: Annotated[
+        int | None, typer.Option("--top-k", help="Top-k active adapters per token.")
+    ] = None,
+    temperature: Annotated[
+        float | None, typer.Option("--temperature", help="Softmax router temperature.")
+    ] = None,
+    smoke: Annotated[
+        bool,
+        typer.Option("--smoke/--no-smoke", help="Enforce < ₹10 smoke budget cap."),
+    ] = True,
+    hardware: Annotated[
+        str,
+        typer.Option(
+            "--hardware",
+            help="Hardware profile: auto | local_cpu | local_mps | demo_replay | "
+            "e2e_l4_24gb | e2e_a100_80gb.",
+        ),
+    ] = "auto",
+    max_cost_inr: Annotated[
+        float | None,
+        typer.Option("--max-cost-inr", help="Hard INR budget ceiling (<= 3000.0)."),
+    ] = None,
+    batch_sizes: Annotated[
+        str, typer.Option("--batch-sizes", help="Comma-separated batch sizes.")
+    ] = "1,4,16,32,64",
+    seq_len: Annotated[
+        int, typer.Option("--seq-len", help="Sequence length per batch element.")
+    ] = 32,
+    dtypes: Annotated[
+        str, typer.Option("--dtypes", help="Comma-separated dtypes (fp16,bf16,fp32).")
+    ] = "fp16,bf16",
+    gks_adapter: Annotated[
+        Path | None,
+        typer.Option("--gks-adapter", help="Optional general-knowledge LoRA for GenKnowSub."),
+    ] = None,
+    gks_lambda: Annotated[
+        float, typer.Option("--gks-lambda", help="GenKnowSub subtraction coefficient lambda.")
+    ] = 1.0,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option("--out-dir", help="Write report_bench.json and manifest.json to directory."),
+    ] = None,
+    seed: Annotated[int | None, typer.Option("--seed", help="Deterministic RNG seed.")] = None,
+    config: Annotated[
+        Path | None, typer.Option("--config", help="Optional path to loraspec.toml.")
+    ] = None,
 ) -> None:
-    """Benchmark Arrow-SGMV Triton kernel parity, latency, and HBM bandwidth (Stage 6 M2)."""
-    _ = (paths, top_k, smoke)
-    _stage6_stub("bench", "M2")
+    """Benchmark Arrow-SGMV numerical parity, latency, and roofline HBM bandwidth."""
+    try:
+        cfg = load_config(config)
+        resolved_backend = resolve_math_backend(cfg.project.default_backend)
+        resolved_top_k = top_k if top_k is not None else cfg.molora.top_k
+        resolved_temp = temperature if temperature is not None else cfg.molora.router_temperature
+        resolved_max_cost = max_cost_inr if max_cost_inr is not None else cfg.budget.max_cost_inr
+        resolved_seed = seed if seed is not None else cfg.knots.rng_seed
+        parsed_batches = _parse_int_csv(batch_sizes, "--batch-sizes")
+        parsed_dtypes = _parse_str_csv(dtypes, "--dtypes")
+
+        if out_dir is not None and out_dir.exists() and not out_dir.is_dir():
+            raise ConfigError(f"--out-dir '{out_dir}' exists and is not a directory.")
+
+        input_paths = list(paths) if paths else []
+        if synthetic and input_paths:
+            raise ConfigError("Pass either adapter paths or --synthetic, not both.")
+        if not synthetic and not input_paths:
+            raise ConfigError("Provide >= 1 adapter path or pass --synthetic.")
+
+        loaded_list: list[LoadedLoRAWeights] = []
+        used_ids: set[str] = set()
+        for p in input_paths:
+            raw = load_peft_adapter(p, backend=resolved_backend)
+            base_id = raw.spec.adapter_id
+            unique_id = base_id
+            if unique_id in used_ids:
+                suffix = 1
+                while f"{base_id}_{suffix}" in used_ids:
+                    suffix += 1
+                unique_id = f"{base_id}_{suffix}"
+                raw = LoadedLoRAWeights(
+                    spec=raw.spec.model_copy(update={"adapter_id": unique_id}),
+                    layer_factors=raw.layer_factors,
+                )
+            used_ids.add(unique_id)
+            loaded_list.append(raw)
+
+        loaded_gks = (
+            load_peft_adapter(gks_adapter, backend=resolved_backend)
+            if gks_adapter is not None
+            else None
+        )
+
+        summary = run_kernel_parity_and_roofline_bench(
+            loaded_adapters=None if synthetic else loaded_list,
+            synthetic=synthetic,
+            top_k=resolved_top_k,
+            temperature=resolved_temp,
+            batch_sizes=parsed_batches,
+            seq_len=seq_len,
+            dtypes=parsed_dtypes,
+            hardware=hardware,
+            smoke=smoke,
+            max_cost_inr=resolved_max_cost,
+            smoke_cap_inr=cfg.budget.smoke_cap_inr,
+            gks_adapter=loaded_gks,
+            gks_lambda=gks_lambda,
+            out_dir=out_dir,
+            seed=resolved_seed,
+            cli_args=sys.argv[1:],
+        )
+    except LoraspecError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    except OSError as exc:
+        typer.echo(f"Error writing benchmark artifact: {exc}", err=True)
+        raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
+
+    btable = Table(
+        title=(
+            "Arrow-SGMV Roofline & Parity Bench "
+            f"({rich_escape(summary.manifest.accelerator_backend)})"
+        )
+    )
+    btable.add_column("Hardware")
+    btable.add_column("Batch")
+    btable.add_column("Dtype")
+    btable.add_column("Arm", style="bold")
+    btable.add_column("Latency (ms)")
+    btable.add_column("TFLOP/s")
+    btable.add_column("HBM GB/s")
+    btable.add_column("Peak VRAM (MB)")
+    btable.add_column("Max Abs Err")
+    for pt in summary.points:
+        btable.add_row(
+            rich_escape(pt.hardware_profile),
+            f"{pt.batch_size}x{pt.seq_len}",
+            pt.dtype,
+            rich_escape(pt.arm_name),
+            f"{pt.latency_ms:.4f}",
+            f"{pt.achieved_tflops:.6f}",
+            f"{pt.hbm_bandwidth_gb_s:.3f}",
+            f"{pt.peak_vram_mb:.4f}",
+            f"{pt.max_abs_err_vs_ref:.2e}",
+        )
+    console.print(btable)
+    console.print(
+        f"[bold]Speedup vs PEFT Eager[/bold]={summary.speedup_vs_peft_eager:.2f}x | "
+        f"[bold]VRAM Savings[/bold]={summary.vram_savings_pct:.2f}% | "
+        f"[bold]GPU Cost[/bold]=₹{summary.manifest.total_gpu_cost_inr:.4f}"
+    )
 
 
 @app.command()

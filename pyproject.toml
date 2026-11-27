@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "loraspec"
-version = "0.1.0"
+version = "0.2.0"
 description = "LoRA Subspace Auditor (KnOTS) & Per-Token Top-k MoLoRA Triton Studio — pre-flight Grassmann/SVD collision SARIF auditor, factorized KnOTS alignment merger, and @triton.jit Arrow-SGMV multi-LoRA serving engine."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -45,8 +45,12 @@ spectral = [
     "numpy>=1.26",
     "safetensors>=0.4.3",
 ]
+kernels = [
+    "torch>=2.2",
+    "triton>=3.0; sys_platform == 'linux'",
+]
 
-# Optional GPU/serving extras ([kernels], [serving], [studio]) are added in M2-M3;
+# Optional serving/studio extras ([serving], [studio]) are added in M3;
 # core CLI + Stage 5/M1 auditing & KnOTS merging run 100% pure-Python CPU or with [spectral].
 
 [project.urls]

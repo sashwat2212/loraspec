@@ -173,3 +173,42 @@ class AuditReport(BaseModel):
     recommendations: list[DeploymentRecommendation] = Field(
         default_factory=list[DeploymentRecommendation]
     )
+
+
+class MoLoRARouteTelemetryBatch(BaseModel):
+    layer_name: str
+    num_tokens: int
+    top_k: int
+    expert_indices: list[list[int]]
+    routing_weights: list[list[float]]
+    router_entropy: list[float]
+    backend: Literal["triton_cuda", "torch_mps", "torch_cpu", "pure_python"]
+
+
+class KernelBenchmarkPoint(BaseModel):
+    hardware_profile: str
+    arm_name: Literal[
+        "base",
+        "peft_linear",
+        "peft_ties",
+        "peft_eager_arrow",
+        "vllm_static",
+        "knots_ties",
+        "triton_arrow_sgmv",
+    ]
+    batch_size: int
+    seq_len: int
+    dtype: Literal["fp16", "bf16", "fp32"]
+    latency_ms: float
+    achieved_tflops: float
+    hbm_bandwidth_gb_s: float
+    peak_vram_mb: float
+    max_abs_err_vs_ref: float = 0.0
+
+
+class BenchmarkSuiteSummary(BaseModel):
+    manifest: RunManifest
+    points: list[KernelBenchmarkPoint]
+    speedup_vs_peft_eager: float
+    vram_savings_pct: float
+    arm_accuracy_pass_at_1: dict[str, float] = Field(default_factory=dict)
