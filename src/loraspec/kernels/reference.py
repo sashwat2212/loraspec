@@ -175,7 +175,7 @@ def arrow_molora_reference(
         delta_seg = (h_seg @ b_e.transpose(0, 1)) * (w_seg * scalings_list[exp_idx])[:, None]
         y_slots[tok_ids, slot_ids, :] = delta_seg
 
-    y_out_2d = base_2d + y_slots.sum(dim=1).to(dtype=base_2d.dtype)
+    y_out_2d = (base_2d.to(dtype=torch_mod.float32) + y_slots.sum(dim=1)).to(dtype=base_2d.dtype)
     telemetry = MoLoRARouteTelemetryBatch(
         layer_name=layer_name,
         num_tokens=num_tokens,
@@ -414,7 +414,9 @@ def peft_eager_arrow_forward(
             expert_deltas.append(out_e)
 
         stacked = torch_mod.stack(expert_deltas, dim=0)  # [K, T, d_out] scratchpad
-        y_out_2d = base_2d + stacked.sum(dim=0).to(dtype=base_2d.dtype)
+        y_out_2d = (base_2d.to(dtype=torch_mod.float32) + stacked.sum(dim=0)).to(
+            dtype=base_2d.dtype
+        )
         telemetry = MoLoRARouteTelemetryBatch(
             layer_name=layer_name,
             num_tokens=num_tokens,
@@ -514,7 +516,11 @@ def static_lora_forward(
         a_slice = a_weight[:r_eff, :].to(dtype=torch_mod.float32)
         b_slice = b_weight[:, :r_eff].to(dtype=torch_mod.float32)
         delta = (x_2d @ a_slice.transpose(0, 1)) @ b_slice.transpose(0, 1) * float(scaling)
-        return (base_2d + delta.to(dtype=base_2d.dtype)).reshape(base_out.shape)
+        return (
+            (base_2d.to(dtype=torch_mod.float32) + delta)
+            .to(dtype=base_2d.dtype)
+            .reshape(base_out.shape)
+        )
 
     x_2d_py, batch_lens = _flatten_py_matrix(x)
     base_2d_py, _ = _flatten_py_matrix(base_out)

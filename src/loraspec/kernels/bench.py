@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from loraspec.core.budget import GpuBudgetGuard
-from loraspec.core.errors import BudgetExceededError, ConfigError, KernelParityError
+from loraspec.core.errors import (
+    BudgetExceededError,
+    ConfigError,
+    KernelParityError,
+    RuntimeExecutionError,
+)
 from loraspec.core.manifest import build_run_manifest
 from loraspec.core.schemas import (
     BenchmarkSuiteSummary,
@@ -382,9 +387,14 @@ async def async_run_kernel_parity_and_roofline_bench(
     if not synthetic and not loaded_adapters:
         raise ConfigError("Provide >= 1 LoRA adapter path or pass --synthetic.")
 
+    if hardware == "local_mps" and optional_torch() is not None and not has_mps():
+        raise RuntimeExecutionError(
+            "Requested --hardware='local_mps', but Apple MPS is unavailable on this host."
+        )
+
     torch_mod = optional_torch()
-    use_cuda = has_triton_cuda()
-    use_mps = has_mps() and not use_cuda
+    use_cuda = has_triton_cuda() and resolved_hw not in {"local_cpu", "local_mps"}
+    use_mps = has_mps() and not use_cuda and resolved_hw != "local_cpu"
 
     if synthetic:
         num_experts = max(4, top_k_val)

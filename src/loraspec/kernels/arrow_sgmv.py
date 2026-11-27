@@ -159,7 +159,11 @@ def build_segment_metadata(
                 f"expert_ids contain out-of-range values outside [0, {num_experts_val})."
             )
 
-        perm = torch_mod.argsort(flat_experts, stable=True)
+        total_assigns = int(flat_experts.numel())
+        composite_key = flat_experts * total_assigns + torch_mod.arange(
+            total_assigns, device=device, dtype=torch_mod.int64
+        )
+        perm = torch_mod.argsort(composite_key)
         sorted_token_ids = (perm // top_k).to(dtype=torch_mod.int32)
         sorted_slots = (perm % top_k).to(dtype=torch_mod.int32)
         sorted_weights = flat_weights[perm]
@@ -546,7 +550,13 @@ def triton_arrow_sgmv_forward(
             f"segment_layout.num_tokens={segment_layout.num_tokens} != x tokens={num_tokens}."
         )
 
-    if num_tokens == 0 or segment_layout.max_segment_len == 0:
+    if (
+        num_tokens == 0
+        or segment_layout.max_segment_len == 0
+        or r_max <= 0
+        or d_in <= 0
+        or d_out <= 0
+    ):
         return base_out.clone()
 
     a_c = a_packed.contiguous()
@@ -621,5 +631,5 @@ def triton_arrow_sgmv_forward(
         IS_FP32=is_fp32,
     )
 
-    y_out_2d = base_2d + y_slots.sum(dim=1).to(dtype=base_2d.dtype)
+    y_out_2d = (base_2d.to(dtype=torch_mod.float32) + y_slots.sum(dim=1)).to(dtype=base_2d.dtype)
     return y_out_2d.reshape(base_out.shape)

@@ -289,9 +289,7 @@ def test_auto_dispatcher_cpu_mps_matches_pure_python() -> None:
                 backend="torch_reference",
             )
             assert tel_ref_alias.backend == expected_backend
-            assert y_ref_alias.detach().cpu().tolist() == pytest.approx(
-                y_auto.detach().cpu().tolist(), abs=1e-6
-            )
+            assert float(torch_mod.max(torch_mod.abs(y_ref_alias - y_auto)).item()) <= 1e-6
 
             # 3D Tensor support
             y_3d_t, tel_3d_t = arrow_molora_reference(
@@ -307,8 +305,9 @@ def test_auto_dispatcher_cpu_mps_matches_pure_python() -> None:
             )
             assert tuple(y_3d_t.shape) == (2, 2, d_out)
             assert tel_3d_t.num_tokens == 4
-            assert y_3d_t.reshape(4, d_out).detach().cpu().tolist() == pytest.approx(
-                y_auto.detach().cpu().tolist(), abs=1e-6
+            assert (
+                float(torch_mod.max(torch_mod.abs(y_3d_t.reshape(4, d_out) - y_auto)).item())
+                <= 1e-6
             )
 
 

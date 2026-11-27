@@ -276,7 +276,7 @@ def test_m2_end_to_end_heterogeneous_molora_pure_python(
                 "F32",
             ),
             f"{layer0}.lora_B.weight": (
-                [[1.25 if i == (offset + c) else 0.0 for c in range(rk)] for i in range(d_small)],
+                [[0.25 if i == (offset + c) else 0.0 for c in range(rk)] for i in range(d_small)],
                 "F32",
             ),
         }
@@ -392,7 +392,8 @@ def test_m2_pytorch_cpu_mps_dispatcher_parity(tmp_path: Path) -> None:
         x_fp32, base_fp32, protos, a_fp32, b_fp32, ranks_t, scalings_t, top_k=2, backend="auto"
     )
     assert tel_cpu.backend == "torch_cpu"
-    assert y_cpu.tolist() == pytest.approx(y_py, abs=1e-4)
+    for row_cpu, row_py in zip(y_cpu.tolist(), y_py, strict=True):
+        assert row_cpu == pytest.approx(row_py, abs=1e-4)
 
     for dt, tol in ((torch_mod.float16, 1e-3), (torch_mod.bfloat16, 5e-3)):
         x_dt = x_fp32.to(dt)
@@ -445,3 +446,32 @@ def test_m2_pytorch_cpu_mps_dispatcher_parity(tmp_path: Path) -> None:
     )
     assert res.exit_code == EXIT_PASS, res.stdout + res.stderr
     assert (out_torch / "report_bench.json").is_file()
+
+    # Explicit --hardware local_cpu executes on CPU even when Apple MPS is present
+    out_cpu_explicit = tmp_path / "torch_bench_cpu"
+    res_cpu = runner.invoke(
+        app,
+        [
+            "bench",
+            "--synthetic",
+            "--smoke",
+            "--hardware",
+            "local_cpu",
+            "--batch-sizes",
+            "1",
+            "--dtypes",
+            "fp32",
+            "--out-dir",
+            str(out_cpu_explicit),
+        ],
+    )
+    assert res_cpu.exit_code == EXIT_PASS, res_cpu.stdout + res_cpu.stderr
+    rep_cpu = BenchmarkSuiteSummary.model_validate_json(
+        (out_cpu_explicit / "report_bench.json").read_text("utf-8")
+    )
+    assert all(p.hardware_profile == "local_cpu" for p in rep_cpu.points)
+    if not has_mps():
+        res_bad_mps = runner.invoke(
+            app, ["bench", "--synthetic", "--smoke", "--hardware", "local_mps"]
+        )
+        assert res_bad_mps.exit_code == EXIT_RUNTIME_ERROR
