@@ -11,6 +11,10 @@ inputs:
     description: "Space- or newline-separated paths to LoRA adapter directories or .safetensors files."
     required: false
     default: "."
+  adapter-paths:
+    description: "Optional alias for `paths` (used when `paths` is left at default '.')."
+    required: false
+    default: ""
   config:
     description: "Optional path to loraspec.toml."
     required: false
@@ -87,6 +91,7 @@ runs:
       env:
         LORASPEC_PACKAGE: ${{ inputs.loraspec-package }}
         LORASPEC_PATHS: ${{ inputs.paths }}
+        LORASPEC_ADAPTER_PATHS: ${{ inputs.adapter-paths }}
         LORASPEC_CONFIG: ${{ inputs.config }}
         LORASPEC_TIERS: ${{ inputs.tiers }}
         LORASPEC_FAIL_ON: ${{ inputs.fail-on }}
@@ -102,8 +107,17 @@ runs:
           adapter_paths+=("$entry")
         done < <(python3 -c '
         import os, shlex, sys
-        raw = os.environ.get("LORASPEC_PATHS", "").strip()
-        parts = shlex.split(raw) if raw else ["."]
+        raw_paths = os.environ.get("LORASPEC_PATHS", "").strip()
+        raw_alias = os.environ.get("LORASPEC_ADAPTER_PATHS", "").strip()
+        if raw_paths and raw_paths != ".":
+            chosen = raw_paths
+        elif raw_alias:
+            chosen = raw_alias
+        else:
+            chosen = raw_paths
+        parts = shlex.split(chosen) if chosen else ["."]
+        if not parts:
+            parts = ["."]
         for p in parts:
             sys.stdout.buffer.write(p.encode("utf-8") + b"\0")
         ')

@@ -59,7 +59,7 @@ steps:
   - uses: actions/checkout@v4
   - uses: sashwat2212/loraspec@v1
     with:
-      paths: "./adapters/sql_lora ./adapters/rust_lora"
+      paths: "./adapters/sql_lora ./adapters/rust_lora" # or adapter-paths
       fail-on: high
 ```
 

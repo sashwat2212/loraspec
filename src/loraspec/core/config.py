@@ -10,6 +10,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from loraspec.core.errors import ConfigError
 from loraspec.core.schemas import Severity
+from loraspec.core.spectral_math import MathBackend
+
+
+def resolve_math_backend(configured_backend: str) -> MathBackend:
+    """Map `ProjectConfig.default_backend` into M1 spectral math backend safely."""
+    if configured_backend == "pure_python":
+        return "pure_python"
+    if configured_backend == "numpy":
+        return "numpy"
+    if configured_backend in {"auto", "triton_cuda", "torch_mps", "torch_cpu"}:
+        return "auto"
+    raise ConfigError(f"Unsupported project.default_backend '{configured_backend}'.")
 
 
 class _StrictModel(BaseModel):

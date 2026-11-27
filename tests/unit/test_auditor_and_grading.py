@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from loraspec.auditor.grading import (
     assign_grade,
     compute_merge_risk_score,
@@ -286,3 +288,118 @@ def test_tiny_norm_non_dead_unsupported_peft_and_rank_mismatch(tmp_path: Path) -
     )
     c001 = [f for f in f_three if f.rule_id == "RULE-CONF-001"]
     assert c001 and c001[0].file_path is not None and "llama_end" in c001[0].file_path
+
+
+def test_dora_triggers_rule_conf_002_and_per_layer_alpha_scaling_audited(tmp_path: Path) -> None:
+    import math
+    import struct
+
+    from loraspec.inspect.safetensors_reader import write_safetensors
+
+    # 1. use_dora=True triggers RULE-CONF-002
+    dora_cfg_dir = tmp_path / "dora_cfg"
+    dora_cfg_dir.mkdir()
+    (dora_cfg_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "peft_type": "LORA",
+                "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+                "r": 2,
+                "lora_alpha": 2.0,
+                "use_dora": True,
+                "target_modules": ["q_proj", "gate_proj"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        dora_cfg_dir / "adapter_model.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.gate_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.gate_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+        },
+    )
+    _, _, f_dora = run_spectral_and_collision_audit(
+        [load_peft_adapter(dora_cfg_dir)], AuditConfig(), run_tier1=False
+    )
+    assert any(f.rule_id == "RULE-CONF-002" and "DoRA" in f.title for f in f_dora)
+
+    # 2. Raw .safetensors containing lora_magnitude_vector triggers DoRA RULE-CONF-002 too
+    raw_mag = tmp_path / "raw_mag.safetensors"
+    hdr = json.dumps(
+        {
+            "layer0.q_proj.lora_A.weight": {
+                "dtype": "F32",
+                "shape": [2, 2],
+                "data_offsets": [0, 16],
+            },
+            "layer0.q_proj.lora_B.weight": {
+                "dtype": "F32",
+                "shape": [2, 2],
+                "data_offsets": [16, 32],
+            },
+            "layer0.q_proj.lora_magnitude_vector.weight": {
+                "dtype": "F32",
+                "shape": [2],
+                "data_offsets": [32, 40],
+            },
+        }
+    ).encode("utf-8")
+    raw_mag.write_bytes(
+        struct.pack("<Q", len(hdr))
+        + hdr
+        + struct.pack("<10f", 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+    )
+    _, _, f_raw_mag = run_spectral_and_collision_audit(
+        [load_peft_adapter(raw_mag)], AuditConfig(), run_tier1=False
+    )
+    assert any(f.rule_id == "RULE-CONF-002" and "DoRA" in f.title for f in f_raw_mag)
+
+    # 3. Per-layer scaling from rank_pattern / alpha_pattern / use_rslora flows into spectral audit
+    pat_dir = tmp_path / "pat_dir"
+    pat_dir.mkdir()
+    (pat_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "peft_type": "LORA",
+                "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+                "r": 4,
+                "lora_alpha": 4.0,
+                "use_rslora": True,
+                "rank_pattern": {"q_proj": 2},
+                "alpha_pattern": {"q_proj": 8.0},
+                "target_modules": ["q_proj", "gate_proj"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        pat_dir / "adapter_model.safetensors",
+        {
+            "base_model.model.layers.0.self_attn.q_proj.lora_A.weight": (
+                [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+                "F32",
+            ),
+            "base_model.model.layers.0.self_attn.q_proj.lora_B.weight": (
+                [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0], [0.0, 0.0]],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.gate_proj.lora_A.weight": (
+                [[1.0 if i == j else 0.0 for j in range(4)] for i in range(4)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.gate_proj.lora_B.weight": (
+                [[1.0 if i == j else 0.0 for j in range(4)] for i in range(4)],
+                "F32",
+            ),
+        },
+    )
+    m_pat, _, f_pat = run_spectral_and_collision_audit(
+        [load_peft_adapter(pat_dir)], AuditConfig(), backend="pure_python"
+    )
+    assert f_pat == []
+    by_mod = {m.module_type: m for m in m_pat}
+    assert by_mod["q_proj"].spectral_norm == pytest.approx(8.0 / math.sqrt(2.0), abs=1e-6)
+    assert by_mod["gate_proj"].spectral_norm == pytest.approx(4.0 / math.sqrt(4.0), abs=1e-6)

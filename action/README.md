@@ -34,6 +34,7 @@ jobs:
 | Input | Default | Description |
 |---|---|---|
 | `paths` | `"."` | Space- or newline-separated paths to adapter directories or `.safetensors` files. |
+| `adapter-paths` | `""` | Optional alias for `paths` (used when `paths` is left at default `"."`). |
 | `config` | `""` | Optional path to `loraspec.toml`. |
 | `tiers` | `"0,1"` | Comma-separated audit tiers (`"0"` or `"0,1"`). |
 | `fail-on` | `"high"` | Minimum finding severity to fail the check (`critical\|high\|medium\|low\|info`). |

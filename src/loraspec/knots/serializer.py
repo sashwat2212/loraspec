@@ -8,16 +8,24 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, cast
 
+from pydantic import ValidationError
+
 from loraspec.core.errors import AdapterParseError, ConfigError
 from loraspec.core.manifest import build_run_manifest, sha256_file
-from loraspec.core.schemas import AuditFinding, KnOTSMergeSummary, Severity
+from loraspec.core.schemas import AuditFinding, KnOTSMergeSummary, LoRAAdapterSpec, Severity
 from loraspec.core.spectral_math import (
     MathBackend,
     Matrix,
     small_svd,
     thin_qr,
+    validate_math_backend,
 )
-from loraspec.inspect.safetensors_reader import LoadedLoRAWeights, write_safetensors
+from loraspec.inspect.safetensors_reader import (
+    LoadedLoRAWeights,
+    get_layer_scaling,
+    strip_peft_base_prefix,
+    write_safetensors,
+)
 from loraspec.knots.aligner import (
     LayerPolicy,
     align_subspaces_knots,
@@ -46,6 +54,7 @@ def reconstruct_merged_lora(
     backend: MathBackend = "auto",
 ) -> tuple[Matrix, Matrix, float]:
     """Compress U * diag(sigmas) * V_merged^T back to rank r_out without dense d_out x d_in."""
+    backend = validate_math_backend(backend)
     if isinstance(target_rank, bool) or target_rank < 1:
         raise ConfigError(f"target_rank must be an integer >= 1, got {target_rank!r}.")
     if not u_shared or not u_shared[0] or not v_merged_t or not v_merged_t[0]:
@@ -143,6 +152,7 @@ def factorized_frobenius_rmse(
     """Compute exact Frobenius RMSE ||B_out A_out - s B_src A_src||_F / sqrt(d_out * d_in)
     via trace inner products in rank-r space (zero dense d_out x d_in allocations).
     """
+    backend = validate_math_backend(backend)
     d_out = len(b_out)
     d_in = len(a_out[0]) if a_out else 0
     if d_out == 0 or d_in == 0:
@@ -319,12 +329,23 @@ def export_peft_merged_adapter(
         "target_modules": sorted(set(target_modules)),
     }
     if len(set(layer_ranks.values())) > 1:
-        peft_config["rank_pattern"] = {
-            lname: rk for lname, rk in sorted(layer_ranks.items()) if rk != primary_rank
-        }
-        peft_config["alpha_pattern"] = {
-            lname: float(rk) for lname, rk in sorted(layer_ranks.items()) if rk != primary_rank
-        }
+        stripped_counts: dict[str, int] = {}
+        for lname in layer_ranks:
+            stripped_key = strip_peft_base_prefix(lname)
+            stripped_counts[stripped_key] = stripped_counts.get(stripped_key, 0) + 1
+
+        rank_pattern: dict[str, int] = {}
+        alpha_pattern: dict[str, float] = {}
+        for lname, rk in sorted(layer_ranks.items()):
+            if rk == primary_rank:
+                continue
+            stripped_key = strip_peft_base_prefix(lname)
+            pattern_key = stripped_key if stripped_counts[stripped_key] == 1 else lname
+            rank_pattern[pattern_key] = rk
+            alpha_pattern[pattern_key] = float(rk)
+
+        peft_config["rank_pattern"] = rank_pattern
+        peft_config["alpha_pattern"] = alpha_pattern
 
     (out_dir / "adapter_config.json").write_text(
         json.dumps(peft_config, indent=2) + "\n",
@@ -363,6 +384,41 @@ def export_peft_merged_adapter(
     }
     manifest_path.write_text(json.dumps(manifest_payload, indent=2) + "\n", encoding="utf-8")
     return summary, findings
+
+
+def _reject_non_finite_json(constant: str) -> object:
+    raise ValueError(f"Non-finite JSON constant '{constant}' is not allowed.")
+
+
+def load_verified_knots_summary(spec: LoRAAdapterSpec) -> KnOTSMergeSummary | None:
+    """Load `knots_merge_manifest.json` iff valid and `output_sha256 == spec.weights_sha256`."""
+    manifest_path = spec.root_path / "knots_merge_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        raw: object = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_non_finite_json,
+        )
+        if not isinstance(raw, dict):
+            return None
+        raw_map = cast(dict[str, object], raw)
+        summary_obj = raw_map.get("summary")
+        if not isinstance(summary_obj, dict):
+            return None
+        summary = KnOTSMergeSummary.model_validate(summary_obj)
+    except (OSError, UnicodeDecodeError, ValueError, ValidationError):
+        return None
+
+    if not (
+        math.isfinite(summary.energy_retained)
+        and math.isfinite(summary.mean_reconstruction_rmse)
+        and math.isfinite(summary.sign_conflict_reduction_pct)
+    ):
+        return None
+    if summary.output_sha256 != spec.weights_sha256:
+        return None
+    return summary
 
 
 def _deduplicate_loaded_ids(loaded: Sequence[LoadedLoRAWeights]) -> list[LoadedLoRAWeights]:
@@ -404,6 +460,7 @@ def merge_knots_adapters(
     backend: MathBackend = "auto",
 ) -> tuple[KnOTSMergeSummary, list[AuditFinding]]:
     """Run complete factorized KnOTS merge pipeline and export PEFT artifacts."""
+    backend = validate_math_backend(backend)
     if isinstance(target_rank, bool) or target_rank < 1:
         raise ConfigError(f"target_rank must be an integer >= 1, got {target_rank!r}.")
     if method not in {"knots_ties", "knots_dare_ties", "knots_linear"}:
@@ -454,12 +511,13 @@ def merge_knots_adapters(
         if len(participating) == 1:
             idx_only, only_item = participating[0]
             a_only, b_only = only_item.layer_factors[lname]
+            layer_scale = get_layer_scaling(only_item.spec, lname)
             if norm_weights[idx_only] == 0.0:
                 eff_scale = 0.0
             elif method == "knots_linear":
-                eff_scale = only_item.spec.scaling * norm_weights[idx_only]
+                eff_scale = layer_scale * norm_weights[idx_only]
             else:
-                eff_scale = only_item.spec.scaling
+                eff_scale = layer_scale
             aligned = align_subspaces_knots(
                 layer_name=lname,
                 adapter_ids=sub_ids,
@@ -476,7 +534,7 @@ def merge_knots_adapters(
                 else [1.0 / float(len(participating))] * len(participating)
             )
             scaled_bs = [
-                scale_matrix(item.layer_factors[lname][1], item.spec.scaling)
+                scale_matrix(item.layer_factors[lname][1], get_layer_scaling(item.spec, lname))
                 for _, item in participating
             ]
             a_mats = [item.layer_factors[lname][0] for _, item in participating]
@@ -528,7 +586,7 @@ def merge_knots_adapters(
                 a_out,
                 b_src,
                 a_src,
-                scaling_src=item.spec.scaling,
+                scaling_src=get_layer_scaling(item.spec, lname),
                 backend=backend,
             )
             rmse_acc += w_m * rmse_m

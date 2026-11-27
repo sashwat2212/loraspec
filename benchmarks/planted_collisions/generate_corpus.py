@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from loraspec.auditor.grading import assign_grade, compute_merge_risk_score
 from loraspec.auditor.probes import run_spectral_and_collision_audit
-from loraspec.core.config import AuditConfig, LoraspecConfig
+from loraspec.core.config import AuditConfig, LoraspecConfig, resolve_math_backend
 from loraspec.core.schemas import Severity, meets_fail_threshold
 from loraspec.core.spectral_math import Matrix
 from loraspec.inspect.safetensors_reader import load_peft_adapter, write_safetensors
@@ -476,6 +476,7 @@ def evaluate_planted_recall(
     raw_cases: list[dict[str, Any]] = raw_manifest["cases"]
     audit_cfg = cfg.audit if cfg is not None else AuditConfig()
     fail_on = cfg.project.fail_on if cfg is not None else Severity.HIGH
+    backend = resolve_math_backend(cfg.project.default_backend) if cfg is not None else "auto"
 
     results: list[PlantedCaseResult] = []
     tp = 0
@@ -490,9 +491,9 @@ def evaluate_planted_recall(
         rel_paths = [str(p) for p in item["adapter_rel_paths"]]
         expected_rules = [str(r) for r in item["expected_rules"]]
 
-        loaded = [load_peft_adapter(corpus_dir / rel) for rel in rel_paths]
+        loaded = [load_peft_adapter(corpus_dir / rel, backend=backend) for rel in rel_paths]
         layer_metrics, collisions, findings = run_spectral_and_collision_audit(
-            loaded, audit_cfg, run_tier1=True
+            loaded, audit_cfg, run_tier1=True, backend=backend
         )
         risk = compute_merge_risk_score(
             findings=findings, layer_metrics=layer_metrics, collisions=collisions

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import math
 import random
+import struct
 from collections.abc import Sequence
 from typing import Any, Literal, cast
 
 from loraspec.core.errors import AdapterParseError, ConfigError
 from loraspec.core.schemas import LoRAAdapterSpec, LoRALayerSpec
-from loraspec.core.spectral_math import MathBackend, Matrix
-from loraspec.inspect.safetensors_reader import LoadedLoRAWeights
+from loraspec.core.spectral_math import MathBackend, Matrix, validate_math_backend
+from loraspec.inspect.safetensors_reader import LoadedLoRAWeights, get_layer_scaling
 from loraspec.knots.aligner import (
     FactorizedKnOTSResult,
     has_non_finite_matrix,
@@ -82,6 +83,18 @@ def apply_genknowsub(
     if isinstance(gks_lambda, bool) or not math.isfinite(float(gks_lambda)):
         raise ConfigError(f"gks_lambda must be a finite float, got {gks_lambda!r}.")
 
+    if gks_adapter.spec.use_dora:
+        raise AdapterParseError(
+            f"Cannot apply GenKnowSub with DoRA adapter '{gks_adapter.spec.adapter_id}': "
+            "DoRA magnitude vectors are unsupported."
+        )
+    for item in loaded_adapters:
+        if item.spec.use_dora:
+            raise AdapterParseError(
+                f"Cannot apply GenKnowSub to DoRA adapter '{item.spec.adapter_id}': "
+                "DoRA magnitude vectors are unsupported."
+            )
+
     for lname, (a_0, b_0) in gks_adapter.layer_factors.items():
         if has_non_finite_matrix(a_0) or has_non_finite_matrix(b_0):
             raise AdapterParseError(
@@ -89,7 +102,6 @@ def apply_genknowsub(
             )
 
     gks_base = gks_adapter.spec.base_model_name_or_path
-    s_0 = gks_adapter.spec.scaling
     lam = float(gks_lambda)
 
     purified: list[LoadedLoRAWeights] = []
@@ -117,7 +129,7 @@ def apply_genknowsub(
                     f"Non-finite weights in adapter '{spec.adapter_id}' layer '{lname}'."
                 )
 
-            b_scaled = scale_matrix(b_m, spec.scaling)
+            b_scaled = scale_matrix(b_m, get_layer_scaling(spec, lname))
             if lname in gks_adapter.layer_factors:
                 a_0, b_0 = gks_adapter.layer_factors[lname]
                 d_out = len(b_m)
@@ -128,6 +140,7 @@ def apply_genknowsub(
                         f"'{spec.adapter_id}': expected ({d_out}, {d_in}), "
                         f"got ({len(b_0)}, {len(a_0[0])})."
                     )
+                s_0 = get_layer_scaling(gks_adapter.spec, lname)
                 neg_b0 = scale_matrix(b_0, -lam * s_0)
                 b_aug = [rb + r0 for rb, r0 in zip(b_scaled, neg_b0, strict=True)]
                 a_aug = [list(row) for row in a_m] + [list(row) for row in a_0]
@@ -145,6 +158,8 @@ def apply_genknowsub(
                 layer_spec.model_copy(
                     update={
                         "rank": new_rank,
+                        "lora_alpha": float(new_rank),
+                        "scaling": 1.0,
                         "a_shape": (new_rank, d_in),
                         "b_shape": (d_out, new_rank),
                         "param_count": param_count,
@@ -180,6 +195,7 @@ def knots_linear(
     backend: MathBackend = "auto",
 ) -> Matrix:
     """Weighted linear combination in aligned V^T-space."""
+    backend = validate_math_backend(backend)
     rows, cols = _validate_aligned_shapes(aligned_v_list)
     norm_w = normalize_weights(len(aligned_v_list), weights)
 
@@ -203,31 +219,137 @@ def knots_linear(
     return out
 
 
-def _trim_ties_numpy(np_mod: Any, arr: Any, density: float) -> Any:
-    if density >= 1.0:
-        return arr.copy()
-    total = int(arr.size)
-    keep_k = max(1, math.ceil(density * total))
-    cutoff_idx = max(0, total - keep_k)
-    sorted_abs = np_mod.sort(np_mod.abs(arr).ravel())
-    thresh = float(sorted_abs[cutoff_idx])
-    if thresh == 0.0:
-        return arr.copy()
-    mask = (arr != 0.0) & (np_mod.abs(arr) >= thresh)
-    return np_mod.where(mask, arr, 0.0)
+def _resolve_sigma_weights(
+    sigmas: Sequence[float] | None,
+    rows: int,
+) -> tuple[list[bool], list[float]]:
+    if sigmas is None:
+        return [True] * rows, [1.0] * rows
+    if len(sigmas) != rows:
+        raise ConfigError(
+            f"Expected {rows} singular values matching V_m^T rows, got {len(sigmas)}."
+        )
+    sigma_vals: list[float] = []
+    for val in sigmas:
+        if isinstance(val, bool) or not math.isfinite(float(val)):
+            raise AdapterParseError(f"Singular value must be finite, got {val!r}.")
+        sigma_vals.append(abs(float(val)))
+    sigma_max = max(sigma_vals, default=0.0)
+    null_cutoff = max(1e-12, 1e-12 * sigma_max)
+    active_rows = [s > null_cutoff for s in sigma_vals]
+    row_weights = [s if is_act else 0.0 for s, is_act in zip(sigma_vals, active_rows, strict=True)]
+    return active_rows, row_weights
 
 
-def _trim_ties_python(mat: Matrix, density: float) -> Matrix:
+def _trim_ties_numpy(
+    np_mod: Any,
+    arr: Any,
+    density: float,
+    *,
+    sigmas: Sequence[float] | None = None,
+) -> Any:
+    rows = int(arr.shape[0])
+    active_rows, row_weights = _resolve_sigma_weights(sigmas, rows)
+    if not any(active_rows):
+        return np_mod.zeros_like(arr)
+
+    active_col = np_mod.asarray(active_rows, dtype=np_mod.bool_)[:, None]
+    cleaned = np_mod.where(active_col, arr, 0.0)
     if density >= 1.0:
-        return [list(row) for row in mat]
-    abs_vals = sorted(abs(v) for row in mat for v in row)
-    total = len(abs_vals)
-    keep_k = max(1, math.ceil(density * total))
-    cutoff_idx = max(0, total - keep_k)
-    thresh = abs_vals[cutoff_idx]
+        return cleaned
+
+    weights_col = np_mod.asarray(row_weights, dtype=np_mod.float64)[:, None]
+    scores = np_mod.abs(cleaned) * weights_col
+    active_scores = scores[active_rows, :].ravel()
+    total_active = int(active_scores.size)
+    keep_k = max(1, math.ceil(density * total_active))
+    cutoff_idx = max(0, total_active - keep_k)
+    thresh = float(np_mod.sort(active_scores)[cutoff_idx])
     if thresh == 0.0:
-        return [list(row) for row in mat]
-    return [[v if (v != 0.0 and abs(v) >= thresh) else 0.0 for v in row] for row in mat]
+        return cleaned
+    mask = active_col & (cleaned != 0.0) & (scores >= thresh)
+    return np_mod.where(mask, cleaned, 0.0)
+
+
+def _trim_ties_pure(
+    mat: Matrix,
+    density: float,
+    *,
+    sigmas: Sequence[float] | None = None,
+) -> Matrix:
+    rows = len(mat)
+    cols = len(mat[0]) if rows else 0
+    active_rows, row_weights = _resolve_sigma_weights(sigmas, rows)
+    if not any(active_rows):
+        return [[0.0] * cols for _ in range(rows)]
+    if density >= 1.0:
+        return [list(mat[r]) if active_rows[r] else [0.0] * cols for r in range(rows)]
+
+    active_scores = [row_weights[r] * abs(v) for r in range(rows) if active_rows[r] for v in mat[r]]
+    total_active = len(active_scores)
+    keep_k = max(1, math.ceil(density * total_active))
+    cutoff_idx = max(0, total_active - keep_k)
+    thresh = sorted(active_scores)[cutoff_idx]
+    if thresh == 0.0:
+        return [list(mat[r]) if active_rows[r] else [0.0] * cols for r in range(rows)]
+    return [
+        [v if (v != 0.0 and (row_weights[r] * abs(v)) >= thresh) else 0.0 for v in mat[r]]
+        if active_rows[r]
+        else [0.0] * cols
+        for r in range(rows)
+    ]
+
+
+_trim_ties_python = _trim_ties_pure
+
+
+def _dare_drop_rescale_numpy(
+    np_mod: Any,
+    arr: Any,
+    rng: random.Random,
+    keep_prob: float,
+    inv_keep: float,
+) -> Any:
+    rows, cols = int(arr.shape[0]), int(arr.shape[1])
+    thresh = min(1 << 32, max(0, int(keep_prob * (1 << 32))))
+    if thresh >= (1 << 32):
+        return arr * inv_keep
+    if thresh <= 0:
+        return np_mod.zeros_like(arr)
+    u32_thresh = np_mod.uint32(thresh)
+    row_bytes = cols * 4
+    mask = np_mod.empty((rows, cols), dtype=np_mod.bool_)
+    for r in range(rows):
+        mask[r] = np_mod.frombuffer(rng.randbytes(row_bytes), dtype="<u4") < u32_thresh
+    return np_mod.where(mask, arr * inv_keep, 0.0)
+
+
+def _dare_drop_rescale_pure(
+    mat: Matrix,
+    rng: random.Random,
+    keep_prob: float,
+    inv_keep: float,
+) -> Matrix:
+    rows = len(mat)
+    cols = len(mat[0]) if rows else 0
+    thresh = min(1 << 32, max(0, int(keep_prob * (1 << 32))))
+    if thresh >= (1 << 32):
+        return [[val * inv_keep for val in row] for row in mat]
+    if thresh <= 0:
+        return [[0.0] * cols for _ in range(rows)]
+    row_bytes = cols * 4
+    fmt = f"<{cols}I"
+    out: Matrix = []
+    for r in range(rows):
+        u32_vals = struct.unpack(fmt, rng.randbytes(row_bytes))
+        row = mat[r]
+        out.append(
+            [
+                val * inv_keep if u32 < thresh else 0.0
+                for val, u32 in zip(row, u32_vals, strict=True)
+            ]
+        )
+    return out
 
 
 def _ties_elect_and_merge_numpy(
@@ -287,10 +409,12 @@ def knots_ties(
     aligned_v_list: Sequence[Matrix],
     weights: Sequence[float] | None = None,
     *,
+    sigmas: Sequence[float] | None = None,
     density: float = 0.50,
     backend: MathBackend = "auto",
 ) -> Matrix:
     """TIES (Trim, Elect Sign, Disjoint Merge) in aligned KnOTS V^T-space."""
+    backend = validate_math_backend(backend)
     rows, cols = _validate_aligned_shapes(aligned_v_list)
     norm_w = normalize_weights(len(aligned_v_list), weights)
     valid_density = _validate_ties_density(density)
@@ -299,12 +423,17 @@ def knots_ties(
         np_mod = optional_numpy()
         if np_mod is not None:
             trimmed = [
-                _trim_ties_numpy(np_mod, np_mod.asarray(mat, dtype=np_mod.float64), valid_density)
+                _trim_ties_numpy(
+                    np_mod,
+                    np_mod.asarray(mat, dtype=np_mod.float64),
+                    valid_density,
+                    sigmas=sigmas,
+                )
                 for mat in aligned_v_list
             ]
             return _ties_elect_and_merge_numpy(np_mod, trimmed, norm_w)
 
-    trimmed_py = [_trim_ties_python(mat, valid_density) for mat in aligned_v_list]
+    trimmed_py = [_trim_ties_pure(mat, valid_density, sigmas=sigmas) for mat in aligned_v_list]
     return _ties_elect_and_merge_python(trimmed_py, norm_w, rows, cols)
 
 
@@ -312,67 +441,85 @@ def knots_dare_ties(
     aligned_v_list: Sequence[Matrix],
     weights: Sequence[float] | None = None,
     *,
+    sigmas: Sequence[float] | None = None,
     density: float = 0.50,
     drop_rate: float = 0.20,
     rng_seed: int = 42,
     backend: MathBackend = "auto",
 ) -> Matrix:
     """DARE-TIES (deterministic seeded Bernoulli drop+rescale + TIES) in aligned V^T-space."""
+    backend = validate_math_backend(backend)
     rows, cols = _validate_aligned_shapes(aligned_v_list)
     norm_w = normalize_weights(len(aligned_v_list), weights)
     valid_density = _validate_ties_density(density)
     valid_drop = _validate_dare_drop_rate(drop_rate)
 
     if valid_drop == 0.0:
-        return knots_ties(aligned_v_list, weights=norm_w, density=valid_density, backend=backend)
+        return knots_ties(
+            aligned_v_list,
+            weights=norm_w,
+            sigmas=sigmas,
+            density=valid_density,
+            backend=backend,
+        )
 
     keep_prob = 1.0 - valid_drop
     inv_keep = 1.0 / keep_prob
+    rng = random.Random(rng_seed)
 
     if backend in ("auto", "numpy"):
         np_mod = optional_numpy()
         if np_mod is not None:
-            rng = np_mod.random.default_rng(rng_seed)
             trimmed_np: list[Any] = []
             for mat in aligned_v_list:
                 arr = np_mod.asarray(mat, dtype=np_mod.float64)
-                mask = rng.random((rows, cols)) < keep_prob
-                rescaled = np_mod.where(mask, arr * inv_keep, 0.0)
-                trimmed_np.append(_trim_ties_numpy(np_mod, rescaled, valid_density))
+                rescaled = _dare_drop_rescale_numpy(np_mod, arr, rng, keep_prob, inv_keep)
+                trimmed_np.append(_trim_ties_numpy(np_mod, rescaled, valid_density, sigmas=sigmas))
             return _ties_elect_and_merge_numpy(np_mod, trimmed_np, norm_w)
 
-    rng_py = random.Random(rng_seed)
     trimmed_py: list[Matrix] = []
     for mat in aligned_v_list:
-        dropped: Matrix = [
-            [val * inv_keep if rng_py.random() < keep_prob else 0.0 for val in row] for row in mat
-        ]
-        trimmed_py.append(_trim_ties_python(dropped, valid_density))
+        dropped = _dare_drop_rescale_pure(mat, rng, keep_prob, inv_keep)
+        trimmed_py.append(_trim_ties_pure(dropped, valid_density, sigmas=sigmas))
     return _ties_elect_and_merge_python(trimmed_py, norm_w, rows, cols)
+
+
+def _compute_aligned_sign_conflict_numpy(
+    np_mod: Any,
+    arrs: Sequence[Any],
+    sigmas: Sequence[float],
+) -> float:
+    num_adapters = len(arrs)
+    if num_adapters < 2:
+        return 0.0
+    sig_sq = np_mod.asarray([s * s for s in sigmas], dtype=np_mod.float64)[:, None]
+    neg = 0.0
+    tot = 0.0
+    for i in range(num_adapters):
+        for j in range(i + 1, num_adapters):
+            prod = arrs[i] * arrs[j]
+            weighted = sig_sq * np_mod.abs(prod)
+            tot += float(np_mod.sum(weighted))
+            neg += float(np_mod.sum(weighted[prod < 0.0]))
+    return neg / tot if tot > 1e-12 else 0.0
 
 
 def _compute_aligned_sign_conflict(
     v_list: Sequence[Matrix],
     sigmas: Sequence[float],
+    *,
+    backend: MathBackend = "auto",
 ) -> float:
     """Compute sigma^2-weighted pairwise sign conflict across aligned V_m^T matrices."""
+    backend = validate_math_backend(backend)
     num_adapters = len(v_list)
     if num_adapters < 2:
         return 0.0
 
-    np_mod = optional_numpy()
+    np_mod = optional_numpy() if backend in ("auto", "numpy") else None
     if np_mod is not None:
-        sig_sq = np_mod.asarray([s * s for s in sigmas], dtype=np_mod.float64)[:, None]
         arrs = [np_mod.asarray(v, dtype=np_mod.float64) for v in v_list]
-        neg = 0.0
-        tot = 0.0
-        for i in range(num_adapters):
-            for j in range(i + 1, num_adapters):
-                prod = arrs[i] * arrs[j]
-                weighted = sig_sq * np_mod.abs(prod)
-                tot += float(np_mod.sum(weighted))
-                neg += float(np_mod.sum(weighted[prod < 0.0]))
-        return neg / tot if tot > 1e-12 else 0.0
+        return _compute_aligned_sign_conflict_numpy(np_mod, arrs, sigmas)
 
     neg_py = 0.0
     tot_py = 0.0
@@ -409,6 +556,7 @@ def merge_aligned_factors(
     backend: MathBackend = "auto",
 ) -> tuple[Matrix, float]:
     """Merge aligned V_m^T factors and return (V_merged^T, post_alignment_sign_conflict)."""
+    backend = validate_math_backend(backend)
     if method not in {"knots_ties", "knots_dare_ties", "knots_linear"}:
         raise ConfigError(
             f"Unsupported KnOTS merge method '{method}'. "
@@ -422,7 +570,7 @@ def merge_aligned_factors(
     if method == "knots_linear":
         v_merged_t = knots_linear(aligned_res.aligned_v_list, weights=norm_w, backend=backend)
         post_conflict = _compute_aligned_sign_conflict(
-            aligned_res.aligned_v_list, aligned_res.sigmas
+            aligned_res.aligned_v_list, aligned_res.sigmas, backend=backend
         )
         return v_merged_t, round(post_conflict, 6)
 
@@ -433,54 +581,63 @@ def merge_aligned_factors(
             if np_mod is not None:
                 trimmed_np = [
                     _trim_ties_numpy(
-                        np_mod, np_mod.asarray(mat, dtype=np_mod.float64), valid_density
+                        np_mod,
+                        np_mod.asarray(mat, dtype=np_mod.float64),
+                        valid_density,
+                        sigmas=aligned_res.sigmas,
                     )
                     for mat in aligned_res.aligned_v_list
                 ]
                 v_merged_t = _ties_elect_and_merge_numpy(np_mod, trimmed_np, norm_w)
-                trimmed_lists = [cast(Matrix, a.tolist()) for a in trimmed_np]
-                post_conflict = _compute_aligned_sign_conflict(trimmed_lists, aligned_res.sigmas)
+                post_conflict = _compute_aligned_sign_conflict_numpy(
+                    np_mod, trimmed_np, aligned_res.sigmas
+                )
                 return v_merged_t, round(post_conflict, 6)
 
-        trimmed_py = [_trim_ties_python(mat, valid_density) for mat in aligned_res.aligned_v_list]
+        trimmed_py = [
+            _trim_ties_pure(mat, valid_density, sigmas=aligned_res.sigmas)
+            for mat in aligned_res.aligned_v_list
+        ]
         v_merged_t = _ties_elect_and_merge_python(trimmed_py, norm_w, rows, cols)
-        post_conflict = _compute_aligned_sign_conflict(trimmed_py, aligned_res.sigmas)
+        post_conflict = _compute_aligned_sign_conflict(
+            trimmed_py, aligned_res.sigmas, backend=backend
+        )
         return v_merged_t, round(post_conflict, 6)
 
     # knots_dare_ties
     valid_drop = _validate_dare_drop_rate(dare_drop_rate)
     keep_prob = 1.0 - valid_drop
     inv_keep = 1.0 / keep_prob if valid_drop > 0.0 else 1.0
+    rng = random.Random(effective_seed)
 
     if backend in ("auto", "numpy"):
         np_mod = optional_numpy()
         if np_mod is not None:
-            rng = np_mod.random.default_rng(effective_seed)
             trimmed_dare_np: list[Any] = []
             for mat in aligned_res.aligned_v_list:
                 arr = np_mod.asarray(mat, dtype=np_mod.float64)
                 if valid_drop > 0.0:
-                    mask = rng.random((rows, cols)) < keep_prob
-                    rescaled = np_mod.where(mask, arr * inv_keep, 0.0)
+                    rescaled = _dare_drop_rescale_numpy(np_mod, arr, rng, keep_prob, inv_keep)
                 else:
                     rescaled = arr.copy()
-                trimmed_dare_np.append(_trim_ties_numpy(np_mod, rescaled, valid_density))
+                trimmed_dare_np.append(
+                    _trim_ties_numpy(np_mod, rescaled, valid_density, sigmas=aligned_res.sigmas)
+                )
             v_merged_t = _ties_elect_and_merge_numpy(np_mod, trimmed_dare_np, norm_w)
-            trimmed_lists = [cast(Matrix, a.tolist()) for a in trimmed_dare_np]
-            post_conflict = _compute_aligned_sign_conflict(trimmed_lists, aligned_res.sigmas)
+            post_conflict = _compute_aligned_sign_conflict_numpy(
+                np_mod, trimmed_dare_np, aligned_res.sigmas
+            )
             return v_merged_t, round(post_conflict, 6)
 
-    rng_py = random.Random(effective_seed)
     trimmed_dare_py: list[Matrix] = []
     for mat in aligned_res.aligned_v_list:
         if valid_drop > 0.0:
-            dropped = [
-                [val * inv_keep if rng_py.random() < keep_prob else 0.0 for val in row]
-                for row in mat
-            ]
+            dropped = _dare_drop_rescale_pure(mat, rng, keep_prob, inv_keep)
         else:
             dropped = [list(row) for row in mat]
-        trimmed_dare_py.append(_trim_ties_python(dropped, valid_density))
+        trimmed_dare_py.append(_trim_ties_pure(dropped, valid_density, sigmas=aligned_res.sigmas))
     v_merged_t = _ties_elect_and_merge_python(trimmed_dare_py, norm_w, rows, cols)
-    post_conflict = _compute_aligned_sign_conflict(trimmed_dare_py, aligned_res.sigmas)
+    post_conflict = _compute_aligned_sign_conflict(
+        trimmed_dare_py, aligned_res.sigmas, backend=backend
+    )
     return v_merged_t, round(post_conflict, 6)

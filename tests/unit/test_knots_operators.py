@@ -294,3 +294,137 @@ def test_factorized_frobenius_rmse_matches_dense() -> None:
     )
     expected_rmse = math.sqrt(sq_sum / float(d_out * d_in))
     assert got_rmse == pytest.approx(expected_rmse, abs=1e-10)
+
+
+def test_isometric_sigma_weighted_ties_blocks_nullspace_rows() -> None:
+    pytest.importorskip("numpy")
+
+    # Rows 0..1 are genuine signal with small V entries (0.05) and high singular values [10.0, 5.0].
+    # Rows 2..3 are nullspace rows (sigma=0.0 and sigma=5e-11 <= 1e-12*100? Let's use sigma_1=100.0
+    # so 5e-11 <= 1e-10 is strictly below relative cutoff max(1e-12, 1e-12 * sigma_1)) with huge
+    # unit-norm V entries (0.95) and conflicting signs.
+    sigmas = [100.0, 20.0, 5e-11, 0.0]
+    v1 = [
+        [0.05, 0.05, 0.05, 0.05],
+        [0.04, 0.04, 0.04, 0.04],
+        [0.95, 0.95, 0.95, 0.95],
+        [0.90, -0.90, 0.90, -0.90],
+    ]
+    v2 = [
+        [0.05, 0.05, 0.05, 0.05],
+        [0.04, 0.04, 0.04, 0.04],
+        [-0.95, -0.95, -0.95, -0.95],
+        [-0.90, 0.90, -0.90, 0.90],
+    ]
+
+    for backend in ("numpy", "pure_python"):
+        merged = knots_ties(
+            [v1, v2], weights=[0.5, 0.5], sigmas=sigmas, density=0.5, backend=backend
+        )
+        # Signal row 0 (100 * 0.05 = 5.0) must survive; nullspace rows must be 0.0
+        assert merged[0] == pytest.approx([0.05, 0.05, 0.05, 0.05], abs=1e-12)
+        assert merged[2] == [0.0, 0.0, 0.0, 0.0]
+        assert merged[3] == [0.0, 0.0, 0.0, 0.0]
+
+    # Same check for knots_dare_ties with sigmas: nullspace rows never vote or consume budget
+    dare_np = knots_dare_ties(
+        [v1, v2],
+        weights=[0.5, 0.5],
+        sigmas=sigmas,
+        density=0.5,
+        drop_rate=0.2,
+        rng_seed=7,
+        backend="numpy",
+    )
+    dare_py = knots_dare_ties(
+        [v1, v2],
+        weights=[0.5, 0.5],
+        sigmas=sigmas,
+        density=0.5,
+        drop_rate=0.2,
+        rng_seed=7,
+        backend="pure_python",
+    )
+    assert dare_np[2] == [0.0, 0.0, 0.0, 0.0]
+    assert dare_np[3] == [0.0, 0.0, 0.0, 0.0]
+    for r_np, r_py in zip(dare_np, dare_py, strict=True):
+        assert r_np == pytest.approx(r_py, abs=1e-12)
+
+
+def test_knots_dare_ties_cross_backend_rng_parity() -> None:
+    pytest.importorskip("numpy")
+    v1 = [[math.sin(0.3 * (i + 1) * (j + 1)) for j in range(16)] for i in range(6)]
+    v2 = [[math.cos(0.25 * (i + 2) * (j + 1)) for j in range(16)] for i in range(6)]
+    sigmas = [12.0, 8.0, 4.0, 1.5, 0.5, 0.0]
+
+    for seed in (1, 42, 1337):
+        out_np = knots_dare_ties(
+            [v1, v2],
+            weights=[0.7, 0.3],
+            sigmas=sigmas,
+            density=0.5,
+            drop_rate=0.25,
+            rng_seed=seed,
+            backend="numpy",
+        )
+        out_py = knots_dare_ties(
+            [v1, v2],
+            weights=[0.7, 0.3],
+            sigmas=sigmas,
+            density=0.5,
+            drop_rate=0.25,
+            rng_seed=seed,
+            backend="pure_python",
+        )
+        for row_np, row_py in zip(out_np, out_py, strict=True):
+            assert row_np == pytest.approx(row_py, abs=1e-12)
+
+    # Near-zero positive drop_rate (keep_prob == 1.0 in float64) never drops at 0xFFFFFFFF
+    tiny_np = knots_dare_ties(
+        [[[1.0] * 16 for _ in range(4)], [[1.0] * 16 for _ in range(4)]][0:2],
+        weights=[0.5, 0.5],
+        density=1.0,
+        drop_rate=1e-18,
+        rng_seed=42,
+        backend="numpy",
+    )
+    tiny_py = knots_dare_ties(
+        [[[1.0] * 16 for _ in range(4)], [[1.0] * 16 for _ in range(4)]][0:2],
+        weights=[0.5, 0.5],
+        density=1.0,
+        drop_rate=1e-18,
+        rng_seed=42,
+        backend="pure_python",
+    )
+    assert all(val == pytest.approx(1.0, abs=1e-12) for row in tiny_np for val in row)
+    assert tiny_np == tiny_py
+
+
+def test_load_verified_knots_summary_rejects_nan_json(tmp_path: Path) -> None:
+    from loraspec.knots.serializer import export_peft_merged_adapter, load_verified_knots_summary
+
+    a_eye = [[1.0, 0.0], [0.0, 1.0]]
+    b_eye = [[1.0, 0.0], [0.0, 1.0]]
+    out_dir = tmp_path / "nan_manifest_dir"
+    export_peft_merged_adapter(
+        out_dir=out_dir,
+        merged_factors={"base_model.model.layers.0.self_attn.q_proj": (a_eye, b_eye)},
+        base_model_name_or_path="Qwen/Qwen2.5-3B-Instruct",
+        target_modules=["q_proj"],
+        method="knots_ties",
+        adapter_ids=["a", "b"],
+        layer_energies={"l": 1.0},
+        layer_rmses={"l": 0.0},
+        pre_conflicts=[0.0],
+        post_conflicts=[0.0],
+        source_sha256s={"a": "0" * 64, "b": "1" * 64},
+    )
+    spec = load_peft_adapter(out_dir).spec
+    assert load_verified_knots_summary(spec) is not None
+
+    manifest_file = out_dir / "knots_merge_manifest.json"
+    bad_text = manifest_file.read_text(encoding="utf-8").replace(
+        '"energy_retained": 1.0', '"energy_retained": NaN'
+    )
+    manifest_file.write_text(bad_text, encoding="utf-8")
+    assert load_verified_knots_summary(spec) is None

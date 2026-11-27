@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from statistics import median
+from typing import cast
 
 from loraspec.core.config import AuditConfig
 from loraspec.core.schemas import (
@@ -15,10 +16,12 @@ from loraspec.core.schemas import (
 )
 from loraspec.core.spectral_math import (
     LayerSubspaceFactors,
+    MathBackend,
     compute_layer_spectral_analysis,
     compute_pairwise_collision,
+    validate_math_backend,
 )
-from loraspec.inspect.safetensors_reader import LoadedLoRAWeights
+from loraspec.inspect.safetensors_reader import LoadedLoRAWeights, get_layer_scaling
 
 MLP_MODULE_MARKERS: frozenset[str] = frozenset(
     {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
@@ -115,6 +118,15 @@ def run_config_probes(
                 )
             if spec.metadata.get("config_rank_mismatch"):
                 layer_ranks = sorted({layer.rank for layer in spec.layers})
+                raw_details = spec.metadata.get("rank_mismatch_details")
+                mismatch_details = (
+                    cast(list[object], raw_details) if isinstance(raw_details, list) else []
+                )
+                detail_str = (
+                    "; ".join(str(d) for d in mismatch_details[:3])
+                    if mismatch_details
+                    else f"r={spec.rank} vs weights ranks={layer_ranks}"
+                )
                 findings.append(
                     AuditFinding(
                         rule_id="RULE-CONF-002",
@@ -125,14 +137,71 @@ def run_config_probes(
                         file_path=_rel_path(spec, use_config=True),
                         line_number=1,
                         evidence=(
-                            f"Adapter '{spec.adapter_id}' configures r={spec.rank} but weights "
-                            f"carry ranks={layer_ranks} without rank_pattern."
+                            f"Adapter '{spec.adapter_id}' has rank mismatch between "
+                            f"adapter_config.json (r={spec.rank}) and .safetensors weights: "
+                            f"{detail_str}."
                         ),
                         remediation=(
                             "Re-export adapter_config.json with matching r or rank_pattern."
                         ),
                     )
                 )
+            bad_layer_alphas = [
+                layer
+                for layer in spec.layers
+                if layer.lora_alpha is not None
+                and (not math.isfinite(layer.lora_alpha) or layer.lora_alpha <= 0.0)
+                and layer.lora_alpha != spec.lora_alpha
+            ]
+            if bad_layer_alphas:
+                sample = bad_layer_alphas[0]
+                findings.append(
+                    AuditFinding(
+                        rule_id="RULE-CONF-002",
+                        title="Non-positive per-layer LoRA alpha in alpha_pattern",
+                        severity=Severity.HIGH,
+                        tier=0,
+                        source="config_probe",
+                        file_path=_rel_path(spec, use_config=True),
+                        line_number=1,
+                        evidence=(
+                            f"Adapter '{spec.adapter_id}' alpha_pattern yields non-positive "
+                            f"lora_alpha={sample.lora_alpha} on {len(bad_layer_alphas)} layer(s), "
+                            f"e.g. '{sample.layer_name}'."
+                        ),
+                        remediation="Set all alpha_pattern values > 0 in adapter_config.json.",
+                    )
+                )
+
+        if spec.use_dora:
+            mag_count = int(spec.metadata.get("dora_magnitude_tensor_count", 0))
+            use_cfg_path = (
+                bool(spec.metadata.get("use_dora_config")) and spec.config_path is not None
+            )
+            use_cfg_dora = bool(spec.metadata.get("use_dora_config", spec.use_dora))
+            findings.append(
+                AuditFinding(
+                    rule_id="RULE-CONF-002",
+                    title="DoRA adapter is incompatible with standard spectral LoRA audit",
+                    severity=Severity.HIGH,
+                    tier=0,
+                    source="config_probe",
+                    file_path=_rel_path(spec, use_config=use_cfg_path),
+                    line_number=1 if use_cfg_path else None,
+                    evidence=(
+                        f"Adapter '{spec.adapter_id}' uses DoRA "
+                        f"(use_dora_config={use_cfg_dora}, "
+                        f"lora_magnitude_vector_tensors={mag_count}); "
+                        "DoRA magnitude vectors couple with base-model weight norms and are "
+                        "incompatible with standard spectral LoRA (s*B*A) audit and KnOTS "
+                        "merge assumptions."
+                    ),
+                    remediation=(
+                        "Export a standard LoRA adapter (use_dora=False without "
+                        "lora_magnitude_vector) before spectral auditing or KnOTS merging."
+                    ),
+                )
+            )
 
         if cfg.require_all_linear:
             modules_present = {layer.module_type for layer in spec.layers} | set(
@@ -215,7 +284,7 @@ def run_config_probes(
                     break
                 layer_dims[layer.layer_name] = dims
 
-        ranks = {a.rank for a in adapters}
+        ranks = {a.rank for a in adapters} | {layer.rank for a in adapters for layer in a.layers}
         rslora_modes = {a.use_rslora for a in adapters}
         if len(ranks) > 1 or len(rslora_modes) > 1:
             findings.append(
@@ -245,12 +314,14 @@ def run_spectral_and_collision_audit(
     cfg: AuditConfig,
     *,
     run_tier1: bool = True,
+    backend: MathBackend = "auto",
 ) -> tuple[
     list[LayerSpectralMetrics],
     list[PairwiseCollisionMetrics],
     list[AuditFinding],
 ]:
     """Compute factorized QR+SVD health, Grassmann collisions, and emit RULE-* findings."""
+    backend = validate_math_backend(backend)
     specs = [item.spec for item in loaded]
     findings = run_config_probes(specs, cfg)
     if not run_tier1:
@@ -272,7 +343,8 @@ def run_spectral_and_collision_audit(
                 layer_spec=layer_spec,
                 a_mat=mat_a,
                 b_mat=mat_b,
-                scaling=spec.scaling,
+                scaling=get_layer_scaling(spec, layer_spec.layer_name),
+                backend=backend,
             )
             adapter_metrics.append(lmetric)
             adapter_factors[layer_spec.layer_name] = lfactor
@@ -392,7 +464,7 @@ def run_spectral_and_collision_audit(
                     )
                 ):
                     continue
-                pm = compute_pairwise_collision(fa, fb)
+                pm = compute_pairwise_collision(fa, fb, backend=backend)
                 pair_metrics.append(pm)
                 collisions.append(pm)
 

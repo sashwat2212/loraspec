@@ -252,7 +252,7 @@
           <tr>
             <td class="mono"><strong>{{ spec.adapter_id }}</strong><div class="muted">{{ spec.adapter_format.value }}</div></td>
             <td class="mono">{{ spec.base_model_name_or_path or "unspecified" }}</td>
-            <td class="mono">r={{ spec.rank }}, &alpha;={{ "%.1f"|format(spec.lora_alpha) }}{% if spec.use_rslora %} (rsLoRA){% endif %}</td>
+            <td class="mono">r={{ spec.rank }}, &alpha;={{ "%.1f"|format(spec.lora_alpha) }}{% if spec.use_rslora %} (rsLoRA){% endif %}{% if spec.use_dora %} (DoRA){% endif %}</td>
             <td class="mono">{{ "%.4f"|format(spec.scaling) }}</td>
             <td class="mono">{{ spec.layers | length }}</td>
             <td class="mono">{{ spec.total_lora_params }}</td>

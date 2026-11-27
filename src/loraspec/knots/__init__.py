@@ -20,6 +20,7 @@ from loraspec.knots.serializer import (
     compute_merge_diagnostics,
     export_peft_merged_adapter,
     factorized_frobenius_rmse,
+    load_verified_knots_summary,
     merge_knots_adapters,
     reconstruct_merged_lora,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "knots_dare_ties",
     "knots_linear",
     "knots_ties",
+    "load_verified_knots_summary",
     "merge_aligned_factors",
     "merge_knots_adapters",
     "reconstruct_merged_lora",
