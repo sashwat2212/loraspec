@@ -52,6 +52,8 @@ class LoRALayerSpec(BaseModel):
     in_features: int
     out_features: int
     rank: int
+    lora_alpha: float | None = None
+    scaling: float | None = None
     dtype: str
     a_key: str
     b_key: str

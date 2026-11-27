@@ -20,18 +20,19 @@ from loraspec.auditor.grading import (
     synthesize_recommendations,
 )
 from loraspec.auditor.probes import run_spectral_and_collision_audit
-from loraspec.core.config import load_config
+from loraspec.core.config import load_config, resolve_math_backend
 from loraspec.core.errors import (
     EXIT_AUDIT_FAIL,
     EXIT_CONFIG_ERROR,
     EXIT_PASS,
+    AdapterParseError,
     ConfigError,
     LoraspecError,
 )
 from loraspec.core.manifest import build_run_manifest, detect_accelerator_backend
 from loraspec.core.schemas import AuditReport, Severity, meets_fail_threshold
 from loraspec.inspect.safetensors_reader import LoadedLoRAWeights, load_peft_adapter
-from loraspec.knots import merge_knots_adapters
+from loraspec.knots import load_verified_knots_summary, merge_knots_adapters
 from loraspec.knots.aligner import LayerPolicy
 from loraspec.knots.operators import KnotsMethod
 from loraspec.knots.serializer import ExportDtype
@@ -202,13 +203,14 @@ def audit(
     """Run $0 CPU spectral rank-collapse & pairwise Grassmann subspace collision audit."""
     try:
         cfg = load_config(config)
+        resolved_backend = resolve_math_backend(cfg.project.default_backend)
         parsed_tiers = _parse_audit_tiers(tiers)
         threshold = fail_on if fail_on is not None else cfg.project.fail_on
 
         loaded_list: list[LoadedLoRAWeights] = []
         used_ids: set[str] = set()
         for p in paths:
-            raw = load_peft_adapter(p)
+            raw = load_peft_adapter(p, backend=resolved_backend)
             base_id = raw.spec.adapter_id
             unique_id = base_id
             if unique_id in used_ids:
@@ -231,6 +233,7 @@ def audit(
         loaded_list,
         cfg.audit,
         run_tier1=run_tier1,
+        backend=resolved_backend,
     )
     risk_score = compute_merge_risk_score(
         findings=findings,
@@ -239,6 +242,9 @@ def audit(
     )
     grade = assign_grade(findings=findings, merge_risk_score=risk_score)
     recommendations = synthesize_recommendations(findings=findings, collisions=collisions)
+    knots_summary = (
+        load_verified_knots_summary(loaded_list[0].spec) if len(loaded_list) == 1 else None
+    )
 
     sha_map = {item.spec.adapter_id: item.spec.weights_sha256 for item in loaded_list}
     manifest = build_run_manifest(
@@ -256,6 +262,7 @@ def audit(
         findings=findings,
         layer_metrics=layer_metrics,
         pairwise_collisions=collisions,
+        knots_summary=knots_summary,
         recommendations=recommendations,
     )
 
@@ -418,6 +425,7 @@ def merge(
     """Align & merge heterogeneous LoRAs via factorized KnOTS joint-SVD ($0 CPU)."""
     try:
         cfg = load_config(config)
+        resolved_backend = resolve_math_backend(cfg.project.default_backend)
         if len(paths) < 2:
             raise ConfigError(f"`loraspec merge` requires at least 2 adapters, got {len(paths)}.")
         if target_rank < 1:
@@ -450,7 +458,7 @@ def merge(
         loaded_list: list[LoadedLoRAWeights] = []
         used_ids: set[str] = set()
         for p in paths:
-            raw = load_peft_adapter(p)
+            raw = load_peft_adapter(p, backend=resolved_backend)
             base_id = raw.spec.adapter_id
             unique_id = base_id
             if unique_id in used_ids:
@@ -465,7 +473,19 @@ def merge(
             used_ids.add(unique_id)
             loaded_list.append(raw)
 
-        loaded_gks = load_peft_adapter(gks_adapter) if gks_adapter is not None else None
+        loaded_gks = (
+            load_peft_adapter(gks_adapter, backend=resolved_backend)
+            if gks_adapter is not None
+            else None
+        )
+        for item in [*loaded_list, *([loaded_gks] if loaded_gks is not None else [])]:
+            if item.spec.use_dora:
+                raise AdapterParseError(
+                    f"Cannot KnOTS-merge DoRA adapter '{item.spec.adapter_id}': "
+                    "DoRA adapters (use_dora=True / lora_magnitude_vector) require base-model "
+                    "weight norms and cannot be merged without silently dropping magnitude "
+                    "vectors. Re-export a standard LoRA adapter (use_dora=False) first."
+                )
     except LoraspecError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=exc.exit_code) from exc
@@ -475,6 +495,7 @@ def merge(
         loaded_list,
         cfg.audit,
         run_tier1=True,
+        backend=resolved_backend,
     )
     blockers = [
         f
@@ -502,6 +523,7 @@ def merge(
             rng_seed=resolved_seed,
             min_energy_retention=cfg.knots.min_energy_retention,
             cli_args=sys.argv[1:],
+            backend=resolved_backend,
         )
     except LoraspecError as exc:
         typer.echo(f"Error: {exc}", err=True)

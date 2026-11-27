@@ -14,6 +14,7 @@ from loraspec.core.spectral_math import (
     Matrix,
     small_svd,
     thin_qr,
+    validate_math_backend,
 )
 from loraspec.inspect.safetensors_reader import LoadedLoRAWeights
 
@@ -90,13 +91,16 @@ def _slice_cols(mat: Matrix, start: int, end: int) -> Matrix:
 def _compute_param_sign_conflict(
     scaled_bs: Sequence[Matrix],
     a_mats: Sequence[Matrix],
+    *,
+    backend: MathBackend = "auto",
 ) -> float:
     """Compute magnitude-weighted parameter-space sign conflict prior to KnOTS alignment."""
+    backend = validate_math_backend(backend)
     num_adapters = len(scaled_bs)
     if num_adapters < 2:
         return 0.0
 
-    np_mod = optional_numpy()
+    np_mod = optional_numpy() if backend in ("auto", "numpy") else None
     if np_mod is not None:
         b_arrs = [np_mod.asarray(b, dtype=np_mod.float64) for b in scaled_bs]
         a_arrs = [np_mod.asarray(a, dtype=np_mod.float64) for a in a_mats]
@@ -181,6 +185,15 @@ def harmonize_heterogeneous_ranks(
         raise ConfigError(
             f"Invalid layer_policy '{layer_policy}'; expected 'union' or 'intersection'."
         )
+
+    for item in loaded_adapters:
+        if item.spec.use_dora:
+            raise AdapterParseError(
+                f"Cannot KnOTS-merge DoRA adapter '{item.spec.adapter_id}': "
+                "DoRA adapters (use_dora=True / lora_magnitude_vector) require base-model "
+                "weight norms and cannot be merged without silently dropping magnitude vectors. "
+                "Export a standard LoRA (use_dora=False) before running KnOTS."
+            )
 
     base_models = {
         item.spec.base_model_name_or_path
@@ -360,6 +373,7 @@ def align_subspaces_knots(
     backend: MathBackend = "auto",
 ) -> FactorizedKnOTSResult:
     """Project K adapters on a layer into shared orthonormal U, sigmas, and aligned V_m^T."""
+    backend = validate_math_backend(backend)
     if len(adapter_ids) != len(scaled_bs) or len(adapter_ids) != len(a_mats):
         raise ConfigError("adapter_ids, scaled_bs, and a_mats must have matching lengths.")
 
@@ -369,7 +383,7 @@ def align_subspaces_knots(
         backend=backend,
     )
     total_sum_rank = sum(len(a_mat) for a_mat in a_mats)
-    pre_conflict = _compute_param_sign_conflict(scaled_bs, a_mats)
+    pre_conflict = _compute_param_sign_conflict(scaled_bs, a_mats, backend=backend)
 
     return FactorizedKnOTSResult(
         layer_name=layer_name,

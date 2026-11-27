@@ -146,7 +146,56 @@ def test_cli_merge_roundtrips_into_inspect_and_audit(tmp_path: Path) -> None:
     rep = AuditReport.model_validate_json((audit_out / "report.json").read_text(encoding="utf-8"))
     assert rep.grade == "A"
     assert rep.merge_risk_score == 0.0
+    assert rep.knots_summary == summary
     assert (audit_out / "report.html").is_file()
+    html_text = (audit_out / "report.html").read_text(encoding="utf-8")
+    assert "KnOTS Joint-SVD Merge Diagnostics" in html_text
+
+    # Re-rendering via `loraspec report` preserves knots_summary in HTML & JSON
+    rep_copy = audit_out / "report_copy.json"
+    rep_html = audit_out / "report_rerender.html"
+    rep_cmd = runner.invoke(
+        app,
+        [
+            "report",
+            str(audit_out / "report.json"),
+            "--json-out",
+            str(rep_copy),
+            "--html",
+            str(rep_html),
+        ],
+    )
+    assert rep_cmd.exit_code == EXIT_PASS, rep_cmd.stderr
+    assert (
+        AuditReport.model_validate_json(rep_copy.read_text(encoding="utf-8")).knots_summary
+        == summary
+    )
+    assert "KnOTS Joint-SVD Merge Diagnostics" in rep_html.read_text(encoding="utf-8")
+
+    # Stale / mismatched output_sha256 in knots_merge_manifest.json must NOT be attached
+    stale_manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    stale_manifest["summary"]["output_sha256"] = "0" * 64
+    manifest_file.write_text(json.dumps(stale_manifest, indent=2), encoding="utf-8")
+    stale_out = tmp_path / "stale_audit"
+    stale_aud = runner.invoke(
+        app,
+        [
+            "audit",
+            str(merged_dir),
+            "--out-dir",
+            str(stale_out),
+            "--html",
+            str(stale_out / "report.html"),
+        ],
+    )
+    assert stale_aud.exit_code == EXIT_PASS
+    stale_rep = AuditReport.model_validate_json(
+        (stale_out / "report.json").read_text(encoding="utf-8")
+    )
+    assert stale_rep.knots_summary is None
+    assert "KnOTS Joint-SVD Merge Diagnostics" not in (stale_out / "report.html").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_knots_export_peft_schema_compatibility(tmp_path: Path) -> None:
@@ -248,7 +297,10 @@ def test_knots_union_heterogeneous_rank_pattern_and_rule_knots_001_cli(tmp_path:
     assert res.exit_code == EXIT_PASS, res.stdout + res.stderr
     cfg_union = json.loads((merged_union / "adapter_config.json").read_text(encoding="utf-8"))
     assert "rank_pattern" in cfg_union
-    assert cfg_union["rank_pattern"][ex_layer] == 4
+    assert "alpha_pattern" in cfg_union
+    assert ex_layer not in cfg_union["rank_pattern"]
+    assert cfg_union["rank_pattern"]["layers.1.mlp.up_proj"] == 4
+    assert cfg_union["alpha_pattern"]["layers.1.mlp.up_proj"] == 4.0
 
     # Round-trip audit must NOT emit RULE-CONF-002 on rank_pattern
     aud_union = runner.invoke(

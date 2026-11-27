@@ -359,3 +359,85 @@ def test_knots_numpy_vs_pure_python_parity() -> None:
     )
     for s_np, s_py in zip(res_np.sigmas, res_py.sigmas, strict=True):
         assert s_np == pytest.approx(s_py, abs=1e-9)
+
+
+def test_harmonize_and_genknowsub_reject_dora(tmp_path: Path) -> None:
+    from loraspec.knots.operators import apply_genknowsub
+    from loraspec.knots.serializer import merge_knots_adapters
+
+    d = 12
+    lname = "base_model.model.layers.0.self_attn.q_proj"
+    a_eye = [[1.0 if j == i else 0.0 for j in range(d)] for i in range(2)]
+    b_eye = [[1.0 if i == j else 0.0 for j in range(2)] for i in range(d)]
+
+    std_dir = _write_adapter_dir(
+        tmp_path / "std", rank=2, alpha=2.0, layers={lname: (a_eye, b_eye)}
+    )
+    dora_dir = _write_adapter_dir(
+        tmp_path / "dora", rank=2, alpha=2.0, layers={lname: (a_eye, b_eye)}
+    )
+    cfg = json.loads((dora_dir / "adapter_config.json").read_text(encoding="utf-8"))
+    cfg["use_dora"] = True
+    (dora_dir / "adapter_config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+    loaded_std = load_peft_adapter(std_dir)
+    loaded_dora = load_peft_adapter(dora_dir)
+    assert loaded_dora.spec.use_dora is True
+
+    with pytest.raises(AdapterParseError, match="DoRA"):
+        harmonize_heterogeneous_ranks([loaded_std, loaded_dora])
+    with pytest.raises(AdapterParseError, match="DoRA"):
+        apply_genknowsub([loaded_std], loaded_dora)
+    with pytest.raises(AdapterParseError, match="DoRA"):
+        merge_knots_adapters([loaded_std, loaded_dora], out_dir=tmp_path / "out_fail")
+
+
+def test_pure_python_backend_bypasses_numpy_completely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import loraspec.core.spectral_math as sm_mod
+    import loraspec.inspect.safetensors_reader as sr_mod
+    import loraspec.knots.aligner as al_mod
+    import loraspec.knots.operators as op_mod
+    import loraspec.knots.serializer as ser_mod
+    from loraspec.auditor.probes import run_spectral_and_collision_audit
+    from loraspec.core.config import AuditConfig
+    from loraspec.knots.serializer import merge_knots_adapters
+
+    def _forbid_numpy() -> None:
+        raise AssertionError("NumPy fast-path must NOT be called when backend='pure_python'")
+
+    monkeypatch.setattr(sm_mod, "_optional_numpy", _forbid_numpy)
+    monkeypatch.setattr(sr_mod, "_optional_numpy", _forbid_numpy)
+    monkeypatch.setattr(al_mod, "optional_numpy", _forbid_numpy)
+    monkeypatch.setattr(op_mod, "optional_numpy", _forbid_numpy)
+    monkeypatch.setattr(ser_mod, "optional_numpy", _forbid_numpy)
+
+    d = 12
+    lname = "base_model.model.layers.0.mlp.gate_proj"
+    a1 = [[1.0 if j == i else 0.0 for j in range(d)] for i in range(2)]
+    b1 = [[1.5 if i == j else 0.0 for j in range(2)] for i in range(d)]
+    a2 = [[1.0 if j == (i + 2) else 0.0 for j in range(d)] for i in range(2)]
+    b2 = [[1.5 if i == (j + 2) else 0.0 for j in range(2)] for i in range(d)]
+
+    p1 = _write_adapter_dir(tmp_path / "p1", rank=2, alpha=2.0, layers={lname: (a1, b1)})
+    p2 = _write_adapter_dir(tmp_path / "p2", rank=2, alpha=2.0, layers={lname: (a2, b2)})
+
+    l1 = load_peft_adapter(p1, backend="pure_python")
+    l2 = load_peft_adapter(p2, backend="pure_python")
+    metrics, cols, findings = run_spectral_and_collision_audit(
+        [l1, l2], AuditConfig(require_all_linear=False), backend="pure_python"
+    )
+    assert len(metrics) == 2
+    assert len(cols) == 1
+    assert findings == []
+
+    summary, merge_findings = merge_knots_adapters(
+        [l1, l2],
+        out_dir=tmp_path / "merged_py",
+        method="knots_dare_ties",
+        target_rank=4,
+        backend="pure_python",
+    )
+    assert summary.energy_retained == pytest.approx(1.0, abs=1e-5)
+    assert merge_findings == []

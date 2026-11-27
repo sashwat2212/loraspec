@@ -489,3 +489,181 @@ def test_spectral_audit_zero_dense_allocation_tracemalloc() -> None:
     assert peak_bytes < dense_f64_bytes // 4, (
         f"Peak traced memory {peak_bytes} bytes exceeded 32 MiB threshold ({dense_f64_bytes} dense)"
     )
+
+
+def test_rank_pattern_alpha_pattern_per_layer_scaling_and_mismatch(tmp_path: Path) -> None:
+    d = 8
+    # 1. Valid rank_pattern & alpha_pattern with exact, stripped, suffix, and regex keys + rsLoRA
+    valid_dir = tmp_path / "valid_patterns"
+    valid_dir.mkdir()
+    (valid_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "peft_type": "LORA",
+                "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+                "r": 4,
+                "lora_alpha": 8.0,
+                "use_rslora": True,
+                "target_modules": ["q_proj", "gate_proj", "up_proj", "down_proj"],
+                "rank_pattern": {
+                    "layers.0.self_attn.q_proj": 2,
+                    "gate_proj": 3,
+                },
+                "alpha_pattern": {
+                    "base_model.model.layers.0.self_attn.q_proj": 4.0,
+                    "gate_proj": 9.0,
+                    ".*down_proj$": 16.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        valid_dir / "adapter_model.safetensors",
+        {
+            "base_model.model.layers.0.self_attn.q_proj.lora_A.weight": (
+                [[1.0 if j == i else 0.0 for j in range(d)] for i in range(2)],
+                "F32",
+            ),
+            "base_model.model.layers.0.self_attn.q_proj.lora_B.weight": (
+                [[1.0 if i == j else 0.0 for j in range(2)] for i in range(d)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.gate_proj.lora_A.weight": (
+                [[1.0 if j == i else 0.0 for j in range(d)] for i in range(3)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.gate_proj.lora_B.weight": (
+                [[1.0 if i == j else 0.0 for j in range(3)] for i in range(d)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.up_proj.lora_A.weight": (
+                [[1.0 if j == i else 0.0 for j in range(d)] for i in range(4)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.up_proj.lora_B.weight": (
+                [[1.0 if i == j else 0.0 for j in range(4)] for i in range(d)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.down_proj.lora_A.weight": (
+                [[1.0 if j == i else 0.0 for j in range(d)] for i in range(4)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.down_proj.lora_B.weight": (
+                [[1.0 if i == j else 0.0 for j in range(4)] for i in range(d)],
+                "F32",
+            ),
+        },
+    )
+
+    loaded = load_peft_adapter(valid_dir)
+    assert not loaded.spec.metadata["config_rank_mismatch"]
+    by_name = {ls.layer_name: ls for ls in loaded.spec.layers}
+    q_ls = by_name["base_model.model.layers.0.self_attn.q_proj"]
+    g_ls = by_name["base_model.model.layers.0.mlp.gate_proj"]
+    u_ls = by_name["base_model.model.layers.0.mlp.up_proj"]
+    d_ls = by_name["base_model.model.layers.0.mlp.down_proj"]
+
+    assert q_ls.rank == 2 and q_ls.lora_alpha == 4.0
+    assert q_ls.scaling == pytest.approx(4.0 / math.sqrt(2.0), abs=1e-12)
+    assert g_ls.rank == 3 and g_ls.lora_alpha == 9.0
+    assert g_ls.scaling == pytest.approx(9.0 / math.sqrt(3.0), abs=1e-12)
+    assert u_ls.rank == 4 and u_ls.lora_alpha == 8.0
+    assert u_ls.scaling == pytest.approx(8.0 / math.sqrt(4.0), abs=1e-12)
+    assert d_ls.rank == 4 and d_ls.lora_alpha == 16.0
+    assert d_ls.scaling == pytest.approx(16.0 / math.sqrt(4.0), abs=1e-12)
+
+    # 2. Non-empty rank_pattern STILL catches mismatch on unmatched or mis-ranked layers
+    mismatch_dir = tmp_path / "mismatch_patterns"
+    mismatch_dir.mkdir()
+    (mismatch_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "peft_type": "LORA",
+                "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+                "r": 4,
+                "lora_alpha": 4.0,
+                "rank_pattern": {"layers.0.self_attn.q_proj": 2},
+                "target_modules": ["q_proj", "gate_proj"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        mismatch_dir / "adapter_model.safetensors",
+        {
+            "base_model.model.layers.0.self_attn.q_proj.lora_A.weight": (
+                [[1.0 if j == i else 0.0 for j in range(d)] for i in range(2)],
+                "F32",
+            ),
+            "base_model.model.layers.0.self_attn.q_proj.lora_B.weight": (
+                [[1.0 if i == j else 0.0 for j in range(2)] for i in range(d)],
+                "F32",
+            ),
+            # gate_proj has rank 6 instead of r=4 and is NOT in rank_pattern!
+            "base_model.model.layers.0.mlp.gate_proj.lora_A.weight": (
+                [[1.0 if j == i else 0.0 for j in range(d)] for i in range(6)],
+                "F32",
+            ),
+            "base_model.model.layers.0.mlp.gate_proj.lora_B.weight": (
+                [[1.0 if i == j else 0.0 for j in range(6)] for i in range(d)],
+                "F32",
+            ),
+        },
+    )
+    loaded_mm = load_peft_adapter(mismatch_dir)
+    assert loaded_mm.spec.metadata["config_rank_mismatch"] is True
+    assert loaded_mm.spec.metadata["rank_mismatch_details"]
+
+
+def test_dora_detection_config_and_safetensors(tmp_path: Path) -> None:
+    # 1. use_dora=True in adapter_config.json
+    cfg_dora = tmp_path / "cfg_dora"
+    cfg_dora.mkdir()
+    (cfg_dora / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "r": 2, "lora_alpha": 2.0, "use_dora": True}),
+        encoding="utf-8",
+    )
+    write_safetensors(
+        cfg_dora / "adapter_model.safetensors",
+        {
+            "layer0.q_proj.lora_A.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+            "layer0.q_proj.lora_B.weight": ([[1.0, 0.0], [0.0, 1.0]], "F32"),
+        },
+    )
+    spec_cfg = load_peft_adapter(cfg_dora).spec
+    assert spec_cfg.use_dora is True
+
+    # 2. 1D lora_magnitude_vector inside .safetensors (even with use_dora=False or raw file)
+    mag_hdr = json.dumps(
+        {
+            "base_model.model.layers.0.q_proj.lora_A.weight": {
+                "dtype": "F32",
+                "shape": [2, 2],
+                "data_offsets": [0, 16],
+            },
+            "base_model.model.layers.0.q_proj.lora_B.weight": {
+                "dtype": "F32",
+                "shape": [2, 2],
+                "data_offsets": [16, 32],
+            },
+            "base_model.model.layers.0.q_proj.lora_magnitude_vector.weight": {
+                "dtype": "F32",
+                "shape": [2],
+                "data_offsets": [32, 40],
+            },
+        }
+    ).encode("utf-8")
+    mag_dir = tmp_path / "mag_dora"
+    mag_dir.mkdir()
+    (mag_dir / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "LORA", "r": 2, "lora_alpha": 2.0, "use_dora": False}),
+        encoding="utf-8",
+    )
+    payload = struct.pack("<10f", 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.5, 0.5)
+    (mag_dir / "adapter_model.safetensors").write_bytes(
+        struct.pack("<Q", len(mag_hdr)) + mag_hdr + payload
+    )
+    spec_mag = load_peft_adapter(mag_dir).spec
+    assert spec_mag.use_dora is True
+    assert spec_mag.metadata["dora_magnitude_tensor_count"] == 1

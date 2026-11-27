@@ -294,3 +294,87 @@ def test_factorized_frobenius_rmse_matches_dense() -> None:
     )
     expected_rmse = math.sqrt(sq_sum / float(d_out * d_in))
     assert got_rmse == pytest.approx(expected_rmse, abs=1e-10)
+
+
+def test_isometric_sigma_weighted_ties_blocks_nullspace_rows() -> None:
+    pytest.importorskip("numpy")
+
+    # Rows 0..1 are genuine signal with small V entries (0.05) and high singular values [10.0, 5.0].
+    # Rows 2..3 are nullspace rows (sigma=0.0 and sigma=5e-11 <= 1e-12*100? Let's use sigma_1=100.0
+    # so 5e-11 <= 1e-10 is strictly below relative cutoff max(1e-12, 1e-12 * sigma_1)) with huge
+    # unit-norm V entries (0.95) and conflicting signs.
+    sigmas = [100.0, 20.0, 5e-11, 0.0]
+    v1 = [
+        [0.05, 0.05, 0.05, 0.05],
+        [0.04, 0.04, 0.04, 0.04],
+        [0.95, 0.95, 0.95, 0.95],
+        [0.90, -0.90, 0.90, -0.90],
+    ]
+    v2 = [
+        [0.05, 0.05, 0.05, 0.05],
+        [0.04, 0.04, 0.04, 0.04],
+        [-0.95, -0.95, -0.95, -0.95],
+        [-0.90, 0.90, -0.90, 0.90],
+    ]
+
+    for backend in ("numpy", "pure_python"):
+        merged = knots_ties(
+            [v1, v2], weights=[0.5, 0.5], sigmas=sigmas, density=0.5, backend=backend
+        )
+        # Signal row 0 (100 * 0.05 = 5.0) must survive; nullspace rows must be 0.0
+        assert merged[0] == pytest.approx([0.05, 0.05, 0.05, 0.05], abs=1e-12)
+        assert merged[2] == [0.0, 0.0, 0.0, 0.0]
+        assert merged[3] == [0.0, 0.0, 0.0, 0.0]
+
+    # Same check for knots_dare_ties with sigmas: nullspace rows never vote or consume budget
+    dare_np = knots_dare_ties(
+        [v1, v2],
+        weights=[0.5, 0.5],
+        sigmas=sigmas,
+        density=0.5,
+        drop_rate=0.2,
+        rng_seed=7,
+        backend="numpy",
+    )
+    dare_py = knots_dare_ties(
+        [v1, v2],
+        weights=[0.5, 0.5],
+        sigmas=sigmas,
+        density=0.5,
+        drop_rate=0.2,
+        rng_seed=7,
+        backend="pure_python",
+    )
+    assert dare_np[2] == [0.0, 0.0, 0.0, 0.0]
+    assert dare_np[3] == [0.0, 0.0, 0.0, 0.0]
+    for r_np, r_py in zip(dare_np, dare_py, strict=True):
+        assert r_np == pytest.approx(r_py, abs=1e-12)
+
+
+def test_knots_dare_ties_cross_backend_rng_parity() -> None:
+    pytest.importorskip("numpy")
+    v1 = [[math.sin(0.3 * (i + 1) * (j + 1)) for j in range(16)] for i in range(6)]
+    v2 = [[math.cos(0.25 * (i + 2) * (j + 1)) for j in range(16)] for i in range(6)]
+    sigmas = [12.0, 8.0, 4.0, 1.5, 0.5, 0.0]
+
+    for seed in (1, 42, 1337):
+        out_np = knots_dare_ties(
+            [v1, v2],
+            weights=[0.7, 0.3],
+            sigmas=sigmas,
+            density=0.5,
+            drop_rate=0.25,
+            rng_seed=seed,
+            backend="numpy",
+        )
+        out_py = knots_dare_ties(
+            [v1, v2],
+            weights=[0.7, 0.3],
+            sigmas=sigmas,
+            density=0.5,
+            drop_rate=0.25,
+            rng_seed=seed,
+            backend="pure_python",
+        )
+        for row_np, row_py in zip(out_np, out_py, strict=True):
+            assert row_np == pytest.approx(row_py, abs=1e-12)

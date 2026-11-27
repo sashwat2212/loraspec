@@ -509,7 +509,7 @@ Every atomic functional requirement specifies its exact **Grades**, **Inputs**, 
 
 #### `FRD-REQ-34` — `$0` CPU GitHub Marketplace Composite Action (`action.yml`)
 - **Grades & Traceability**: `P1` | `Should` | `G2-High` | `Complexity: S` | `Tier: T0` (`₹0`) | `Milestone: M1` | `Gate: GATE-6 (M1) / GATE-7` | `BRD-REQ-20` / `FEAT-20`
-- **Inputs**: Action inputs (`adapter-paths`, `config`, `fail-on`, `sarif-file`, `html-file`, `out-dir`, `loraspec-version`).
+- **Inputs**: Action inputs (`paths` with optional `adapter-paths` alias, `config`, `tiers`, `fail-on`, `out-dir`, `sarif-file`, `html-file`, `upload-sarif`, `upload-html-artifact`, `loraspec-package`, `python-version`).
 - **Preconditions**: Runs on `ubuntu-latest` CPU runner with zero GPU or `torch` required.
 - **Processing & Mathematical/Algorithmic Rules**:
   1. Bootstrap `uv` via `astral-sh/setup-uv` and run `uvx --from loraspec` (or local workspace during repo self-test) `loraspec audit` emitting `report.json`, `manifest.json`, `loraspec.sarif`, and `loraspec.html`.
@@ -680,6 +680,8 @@ class LoRALayerSpec(BaseModel):
     in_features: int
     out_features: int
     rank: int
+    lora_alpha: float | None = None
+    scaling: float | None = None
     dtype: str
     a_key: str
     b_key: str

@@ -12,10 +12,20 @@ import math
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+from loraspec.core.errors import ConfigError
 from loraspec.core.schemas import LayerSpectralMetrics, LoRALayerSpec, PairwiseCollisionMetrics
 
 Matrix = list[list[float]]
 MathBackend = Literal["auto", "numpy", "pure_python"]
+
+
+def validate_math_backend(backend: str) -> MathBackend:
+    """Validate explicit spectral math backend selector."""
+    if backend not in {"auto", "numpy", "pure_python"}:
+        raise ConfigError(
+            f"Unsupported math backend '{backend}'. Expected 'auto', 'numpy', or 'pure_python'."
+        )
+    return cast(MathBackend, backend)
 
 
 def _optional_numpy() -> Any | None:
@@ -316,6 +326,7 @@ def compute_layer_spectral_analysis(
     backend: MathBackend = "auto",
 ) -> tuple[LayerSpectralMetrics, LayerSubspaceFactors]:
     """Compute exact rank-r singular values, stable rank, and active orthonormal bases."""
+    backend = validate_math_backend(backend)
     if backend in ("auto", "numpy"):
         np_mod = _optional_numpy()
         if np_mod is not None:
@@ -402,6 +413,7 @@ def compute_pairwise_collision(
     backend: MathBackend = "auto",
 ) -> PairwiseCollisionMetrics:
     """Compute Grassmann principal angles, chordal/geodesic distance, and sign conflict."""
+    backend = validate_math_backend(backend)
     k_a = len(fa.u_active[0]) if fa.u_active and fa.u_active[0] else 0
     k_b = len(fb.u_active[0]) if fb.u_active and fb.u_active[0] else 0
     k_va = len(fa.v_active[0]) if fa.v_active and fa.v_active[0] else 0
