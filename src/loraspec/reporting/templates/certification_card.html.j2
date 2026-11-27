@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>loraspec Certification Card — Grade {{ report.grade }}</title>
+  <style>
+    :root {
+      --bg: #0a0d12;
+      --surface: #121822;
+      --surface-2: #192231;
+      --border: #253247;
+      --text: #e6edf7;
+      --muted: #93a4bd;
+      --accent: #38bdf8;
+      --green: #10b981;
+      --lime: #84cc16;
+      --amber: #f59e0b;
+      --orange: #f97316;
+      --red: #ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.5;
+    }
+    .container { max-width: 1140px; margin: 0 auto; }
+    .header-card {
+      background: linear-gradient(135deg, #121822 0%, #182336 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 24px;
+      align-items: center;
+    }
+    @media (max-width: 780px) {
+      .header-card { grid-template-columns: 1fr; }
+    }
+    .brand {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+    h1 { margin: 0 0 8px 0; font-size: 22px; font-weight: 700; overflow-wrap: anywhere; }
+    .meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .chip {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      color: var(--muted);
+    }
+    .chip strong { color: var(--text); font-weight: 600; }
+    .section {
+      margin-top: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .section h2 {
+      margin: 0 0 14px 0;
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .kpi {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .kpi-label { font-size: 12px; color: var(--muted); }
+    .kpi-val {
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+    }
+    .chart-wrap { margin-top: 10px; overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 9px 11px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pill {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .sev-critical { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid #ef4444; }
+    .sev-high { background: rgba(249, 115, 22, 0.2); color: #fdba74; border: 1px solid #f97316; }
+    .sev-medium { background: rgba(245, 158, 11, 0.2); color: #fde047; border: 1px solid #f59e0b; }
+    .sev-low { background: rgba(56, 189, 248, 0.2); color: #7dd3fc; border: 1px solid #38bdf8; }
+    .sev-info { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; border: 1px solid #64748b; }
+    .rec-pill {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 3px 9px;
+      border-radius: 6px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: #7dd3fc;
+      display: inline-block;
+      margin-right: 6px;
+      margin-top: 6px;
+    }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .muted { color: var(--muted); }
+    pre {
+      margin: 6px 0 0 0;
+      padding: 9px;
+      background: #080b10;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .filter-btn {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 18px;
+      font-size: 12px;
+    }
+    .footer-grid > div { overflow-wrap: anywhere; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header-card">
+      <div>
+        <div class="brand">loraspec &middot; LoRA Subspace Certification Card</div>
+        <h1>{{ header_title }}</h1>
+        <div class="muted">Base Model(s): {{ base_models_display }}</div>
+        <div class="meta-chips">
+          <span class="chip">Adapters: <strong>{{ report.adapters | length }}</strong></span>
+          <span class="chip">Layers Probed: <strong>{{ report.layer_metrics | length }}</strong></span>
+          <span class="chip">Findings: <strong>{{ report.findings | length }}</strong></span>
+          <span class="chip">Run: <strong>{{ report.manifest.run_id[:12] }}</strong></span>
+          <span class="chip">Backend: <strong>{{ report.manifest.accelerator_backend }}</strong></span>
+        </div>
+        <div>
+          {% for rec in report.recommendations %}
+          <span class="rec-pill">{{ rec.value }}</span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Inline SVG Grade Badge -->
+      <div aria-label="Certification Grade {{ report.grade }}">
+        <svg width="116" height="116" viewBox="0 0 116 116" role="img">
+          <rect x="4" y="4" width="108" height="108" rx="18" fill="#0f172a" stroke="{{ grade_color }}" stroke-width="4"/>
+          <text x="58" y="26" text-anchor="middle" fill="#93a4bd" font-size="11" font-family="monospace">GRADE</text>
+          <text x="58" y="77" text-anchor="middle" fill="{{ grade_color }}" font-size="52" font-weight="700" font-family="sans-serif">{{ report.grade }}</text>
+          <text x="58" y="99" text-anchor="middle" fill="#cbd5e1" font-size="10" font-family="monospace">{{ grade_label }}</text>
+        </svg>
+      </div>
+
+      <!-- Inline SVG MergeRiskScore Gauge -->
+      <div aria-label="MergeRiskScore {{ risk_score_display }}">
+        <svg width="150" height="116" viewBox="0 0 150 116" role="img">
+          <circle cx="75" cy="60" r="40" fill="none" stroke="#1e293b" stroke-width="10"/>
+          <circle cx="75" cy="60" r="40" fill="none" stroke="{{ risk_gauge_color }}" stroke-width="10"
+                  stroke-dasharray="{{ risk_gauge_dash }} 251.33" stroke-linecap="round"
+                  transform="rotate(-90 75 60)"/>
+          <text x="75" y="58" text-anchor="middle" fill="#e6edf7" font-size="20" font-weight="700" font-family="monospace">{{ risk_score_display }}</text>
+          <text x="75" y="74" text-anchor="middle" fill="#93a4bd" font-size="9" font-family="monospace">MERGE RISK</text>
+          <text x="75" y="109" text-anchor="middle" fill="#93a4bd" font-size="10" font-family="monospace">0 (SAFE) - 100</text>
+        </svg>
+      </div>
+    </header>
+
+    {% if report.adapters %}
+    <section class="section">
+      <h2>
+        <span>Adapter Fleet Inventory</span>
+        <span class="mono muted">{{ report.adapters | length }} adapter(s)</span>
+      </h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Adapter ID</th>
+            <th>Base Model</th>
+            <th>Rank / Alpha</th>
+            <th>Scaling</th>
+            <th>Layers</th>
+            <th>Params</th>
+            <th>Weights SHA-256</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for spec in report.adapters %}
+          <tr>
+            <td class="mono"><strong>{{ spec.adapter_id }}</strong><div class="muted">{{ spec.adapter_format.value }}</div></td>
+            <td class="mono">{{ spec.base_model_name_or_path or "unspecified" }}</td>
+            <td class="mono">r={{ spec.rank }}, &alpha;={{ "%.1f"|format(spec.lora_alpha) }}{% if spec.use_rslora %} (rsLoRA){% endif %}</td>
+            <td class="mono">{{ "%.4f"|format(spec.scaling) }}</td>
+            <td class="mono">{{ spec.layers | length }}</td>
+            <td class="mono">{{ spec.total_lora_params }}</td>
+            <td class="mono">{{ spec.weights_sha256[:16] }}...</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+
+    {% if heatmap_cells %}
+    <section class="section">
+      <h2>
+        <span>Pairwise Grassmann Chordal Similarity Heatmap</span>
+        <span class="mono muted">0.00 orthogonal &rarr; 1.00 collinear</span>
+      </h2>
+      <div class="chart-wrap">
+        <svg width="{{ heatmap_svg_width }}" height="{{ heatmap_svg_height }}" viewBox="0 0 {{ heatmap_svg_width }} {{ heatmap_svg_height }}" role="img" aria-label="Grassmann chordal similarity matrix">
+          {% for lbl in heatmap_labels %}
+          <text x="{{ lbl.col_x }}" y="24" text-anchor="middle" fill="#93a4bd" font-size="11" font-family="monospace">{{ lbl.short_id }}</text>
+          <text x="{{ heatmap_label_pad - 8 }}" y="{{ lbl.row_y }}" text-anchor="end" fill="#93a4bd" font-size="11" font-family="monospace">{{ lbl.short_id }}</text>
+          {% endfor %}
+          {% for cell in heatmap_cells %}
+          <g>
+            <title>{{ cell.tooltip }}</title>
+            <rect x="{{ cell.x }}" y="{{ cell.y }}" width="{{ cell.size }}" height="{{ cell.size }}" rx="6" fill="{{ cell.fill }}" stroke="#0a0d12" stroke-width="2"/>
+            <text x="{{ cell.x + cell.size / 2 }}" y="{{ cell.y + cell.size / 2 + 4 }}" text-anchor="middle" fill="#f8fafc" font-size="12" font-weight="700" font-family="monospace">{{ cell.value_label }}</text>
+          </g>
+          {% endfor %}
+        </svg>
+      </div>
+      {% if top_collisions %}
+      <div class="muted" style="margin-top:12px;margin-bottom:6px;font-size:12px;">
+        Top Shared-Layer Collisions (showing {{ top_collisions | length }} of {{ report.pairwise_collisions | length }}):
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Pair</th>
+            <th>Layer</th>
+            <th>Chordal Sim</th>
+            <th>Row Sim</th>
+            <th>Geodesic Dist</th>
+            <th>Sign Conflict</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for pc in top_collisions %}
+          <tr>
+            <td class="mono">{{ pc.adapter_a }} &harr; {{ pc.adapter_b }}</td>
+            <td class="mono">{{ pc.layer_name }}</td>
+            <td class="mono">{{ "%.4f"|format(pc.grassmann_chordal_similarity) }}</td>
+            <td class="mono">{{ "%.4f"|format(pc.row_chordal_similarity) }}</td>
+            <td class="mono">{{ "%.4f"|format(pc.grassmann_geodesic_dist) }}</td>
+            <td class="mono">{{ "%.4f"|format(pc.sign_conflict_rate) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if rank_bars %}
+    <section class="section">
+      <h2>
+        <span>Per-Layer Effective Rank Utilization (r_eff / r)</span>
+        <span class="mono muted">Showing {{ rank_bars | length }} of {{ report.layer_metrics | length }} layer(s) &middot; dashed threshold=0.20</span>
+      </h2>
+      <div class="chart-wrap">
+        <svg width="{{ rank_svg_width }}" height="168" viewBox="0 0 {{ rank_svg_width }} 168" role="img" aria-label="Effective rank utilization bar chart">
+          <line x1="20" y1="26" x2="{{ rank_svg_width - 14 }}" y2="26" stroke="#1e293b" stroke-width="1"/>
+          <line x1="20" y1="{{ rank_threshold_y }}" x2="{{ rank_svg_width - 14 }}" y2="{{ rank_threshold_y }}" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3"/>
+          <line x1="20" y1="126" x2="{{ rank_svg_width - 14 }}" y2="126" stroke="#253247" stroke-width="1"/>
+          <text x="16" y="30" text-anchor="end" fill="#64748b" font-size="9" font-family="monospace">1.0</text>
+          <text x="16" y="{{ rank_threshold_y + 3 }}" text-anchor="end" fill="#ef4444" font-size="9" font-family="monospace">0.2</text>
+          <text x="16" y="130" text-anchor="end" fill="#64748b" font-size="9" font-family="monospace">0.0</text>
+          {% for bar in rank_bars %}
+          <g>
+            <title>{{ bar.tooltip }}</title>
+            <rect x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.width }}" height="{{ bar.height }}" rx="3" fill="{{ bar.color }}"/>
+            <text x="{{ bar.x + bar.width / 2 }}" y="{{ bar.y - 5 }}" text-anchor="middle" fill="#cbd5e1" font-size="9" font-family="monospace">{{ bar.pct_label }}</text>
+            <text x="{{ bar.x + bar.width / 2 }}" y="143" text-anchor="middle" fill="#93a4bd" font-size="9" font-family="monospace">{{ bar.short_label }}</text>
+          </g>
+          {% endfor %}
+        </svg>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if report.knots_summary %}
+    <section class="section">
+      <h2>
+        <span>KnOTS Joint-SVD Merge Diagnostics</span>
+        <span class="mono muted">{{ report.knots_summary.method }}</span>
+      </h2>
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="kpi-label">Target Rank</div>
+          <div class="kpi-val">r={{ report.knots_summary.target_rank }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Singular Energy Retained</div>
+          <div class="kpi-val">{{ "%.2f%%"|format(report.knots_summary.energy_retained * 100) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Mean Reconstruction RMSE</div>
+          <div class="kpi-val">{{ "%.6f"|format(report.knots_summary.mean_reconstruction_rmse) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Sign Conflict Reduction</div>
+          <div class="kpi-val">{{ "%.2f%%"|format(report.knots_summary.sign_conflict_reduction_pct) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Output SHA-256</div>
+          <div class="kpi-val" style="font-size:13px;">{{ report.knots_summary.output_sha256[:16] }}...</div>
+        </div>
+      </div>
+      <div class="muted mono" style="margin-top:10px;">
+        Adapters Merged: {{ report.knots_summary.adapters_merged | join(", ") }}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="section">
+      <h2>
+        <span>Audit Findings</span>
+        <span class="mono muted">{{ report.findings | length }} total</span>
+      </h2>
+      {% if report.findings %}
+      <div class="filters" role="group" aria-label="Filter findings by severity">
+        <button class="filter-btn active" type="button" onclick="loraspecFilter('all', this)">All ({{ report.findings | length }})</button>
+        {% for sev in severity_counts %}
+        <button class="filter-btn" type="button" onclick="loraspecFilter('{{ sev.name }}', this)">{{ sev.name | upper }} ({{ sev.count }})</button>
+        {% endfor %}
+      </div>
+      <table id="findings-table">
+        <thead>
+          <tr>
+            <th>Rule</th>
+            <th>Severity</th>
+            <th>Tier</th>
+            <th>Location</th>
+            <th>Details &amp; Remediation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in report.findings %}
+          <tr data-severity="{{ f.severity.value }}">
+            <td class="mono"><strong>{{ f.rule_id }}</strong><div class="muted">{{ f.source }}</div></td>
+            <td><span class="pill sev-{{ f.severity.value }}">{{ f.severity.value }}</span></td>
+            <td class="mono">T{{ f.tier }}</td>
+            <td class="mono">{{ f.file_path or "-" }}{% if f.file_path and f.line_number %}:{{ f.line_number }}{% endif %}</td>
+            <td>
+              <div><strong>{{ f.title }}</strong></div>
+              <pre>{{ f.evidence }}</pre>
+              <div class="muted" style="margin-top:6px;">Remediation: {{ f.remediation }}</div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="muted">No config parity, rank collapse, spectral spike, or Grassmann collision findings detected.</div>
+      {% endif %}
+    </section>
+
+    <footer class="section">
+      <h2>
+        <span>RunManifest SHA-256 Verification Strip</span>
+        <span class="mono muted">schema v{{ report.schema_version }}</span>
+      </h2>
+      <div class="footer-grid mono">
+        <div><span class="muted">run_id:</span> {{ report.manifest.run_id }}</div>
+        <div><span class="muted">loraspec_version:</span> {{ report.manifest.loraspec_version }}</div>
+        <div><span class="muted">timestamp_utc:</span> {{ report.manifest.timestamp_utc }}</div>
+        <div><span class="muted">host:</span> {{ report.manifest.host_os }}/{{ report.manifest.host_arch }}</div>
+        <div><span class="muted">backend:</span> {{ report.manifest.accelerator_backend }}</div>
+        <div><span class="muted">git_sha:</span> {{ report.manifest.git_sha or "n/a" }}</div>
+        <div><span class="muted">rng_seed:</span> {{ report.manifest.rng_seed }}</div>
+        <div><span class="muted">gpu_cost_inr:</span> &#8377;{{ "%.4f"|format(report.manifest.total_gpu_cost_inr) }}</div>
+      </div>
+      {% if report.manifest.adapter_sha256s %}
+      <div class="mono" style="margin-top:12px;">
+        <div class="muted" style="margin-bottom:4px;">Adapter Weight SHA-256 Digests:</div>
+        {% for aid, digest in report.manifest.adapter_sha256s.items() %}
+        <div>{{ aid }}: {{ digest }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </footer>
+  </div>
+
+  <script>
+    function loraspecFilter(sev, btn) {
+      document.querySelectorAll('.filter-btn').forEach(function (b) { b.classList.remove('active'); });
+      if (btn) { btn.classList.add('active'); }
+      document.querySelectorAll('#findings-table tbody tr').forEach(function (row) {
+        row.style.display = (sev === 'all' || row.getAttribute('data-severity') === sev) ? '' : 'none';
+      });
+    }
+  </script>
+</body>
+</html>
+

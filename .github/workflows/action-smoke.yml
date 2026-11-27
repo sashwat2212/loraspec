@@ -1,0 +1,99 @@
+name: loraspec Action Smoke Self-Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  action-self-test:
+    name: Verify Root action.yml on Planted Orthogonal & Colliding LoRAs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install workspace dependencies
+        run: uv sync --frozen
+
+      - name: Generate temporary planted corpus in /tmp/loraspec-action-smoke
+        run: |
+          uv run python benchmarks/planted_collisions/generate_corpus.py \
+            --out-dir /tmp/loraspec-action-smoke \
+            --verify
+
+      - name: Run root action.yml on clean orthogonal pair (expect Grade A, exit 0)
+        id: smoke-ok
+        uses: ./
+        with:
+          paths: |
+            /tmp/loraspec-action-smoke/controls/01_orthogonal_all_linear_pair/adapter_a
+            /tmp/loraspec-action-smoke/controls/01_orthogonal_all_linear_pair/adapter_b
+          tiers: "0,1"
+          fail-on: high
+          loraspec-package: "."
+          upload-sarif: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          upload-html-artifact: "true"
+
+      - name: Assert Grade A outputs & offline HTML card invariants
+        run: |
+          echo "Clean Grade=${{ steps.smoke-ok.outputs.grade }} Risk=${{ steps.smoke-ok.outputs.merge-risk-score }}"
+          test "${{ steps.smoke-ok.outputs.grade }}" = "A"
+          test "${{ steps.smoke-ok.outputs.merge-risk-score }}" = "0.00"
+          test "${{ steps.smoke-ok.outputs.exit-code }}" = "0"
+          python3 - "${{ steps.smoke-ok.outputs.html-file }}" <<'PY'
+          import re, sys
+          from pathlib import Path
+          html = Path(sys.argv[1]).read_text(encoding="utf-8")
+          assert len(html.encode("utf-8")) < 250 * 1024
+          assert not re.search(r"https?://", html, flags=re.IGNORECASE)
+          assert "<svg" in html
+          PY
+
+      - name: Run root action.yml on colliding pair (expect Grade F, exit 1, RULE-SPEC-004 SARIF)
+        id: smoke-fail
+        continue-on-error: true
+        uses: ./
+        with:
+          paths: |
+            /tmp/loraspec-action-smoke/faults/07_colliding_sign_conflict_pair/adapter_a
+            /tmp/loraspec-action-smoke/faults/07_colliding_sign_conflict_pair/adapter_b
+          tiers: "0,1"
+          fail-on: high
+          out-dir: "loraspec-fail-artifacts"
+          sarif-file: "loraspec-fail-artifacts/loraspec.sarif"
+          html-file: "loraspec-fail-artifacts/loraspec.html"
+          loraspec-package: "."
+          upload-sarif: "false"
+          upload-html-artifact: "false"
+
+      - name: Assert colliding pair emitted RULE-SPEC-004 SARIF & valid offline HTML
+        run: |
+          echo "Colliding Grade=${{ steps.smoke-fail.outputs.grade }} Exit=${{ steps.smoke-fail.outputs.exit-code }}"
+          test "${{ steps.smoke-fail.outputs.exit-code }}" = "1"
+          test "${{ steps.smoke-fail.outputs.grade }}" = "F"
+          python3 - <<'PY'
+          import json, re
+          from pathlib import Path
+          sarif = json.loads(Path("loraspec-fail-artifacts/loraspec.sarif").read_text(encoding="utf-8"))
+          assert sarif["version"] == "2.1.0"
+          rule_ids = [r["ruleId"] for r in sarif["runs"][0]["results"]]
+          assert "RULE-SPEC-004" in rule_ids, f"Missing RULE-SPEC-004 in {rule_ids}"
+          html = Path("loraspec-fail-artifacts/loraspec.html").read_text(encoding="utf-8")
+          assert len(html.encode("utf-8")) < 250 * 1024
+          assert not re.search(r"https?://", html, flags=re.IGNORECASE)
+          assert "RULE-SPEC-004" in html
+          PY
+

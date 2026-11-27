@@ -40,8 +40,14 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
-# Stage 6 optional extras ([spectral], [kernels], [serving], [studio]) are added in M1-M3
-# when locking online; Stage 5 core runs 100% zero-dependency on pure-Python CPU.
+[project.optional-dependencies]
+spectral = [
+    "numpy>=1.26",
+    "safetensors>=0.4.3",
+]
+
+# Optional GPU/serving extras ([kernels], [serving], [studio]) are added in M2-M3;
+# core CLI + Stage 5/M1 auditing & KnOTS merging run 100% pure-Python CPU or with [spectral].
 
 [project.urls]
 Homepage = "https://github.com/sashwat2212/loraspec"
@@ -62,6 +68,7 @@ loraspec = "loraspec.cli.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/loraspec"]
+artifacts = ["src/loraspec/reporting/templates/*.j2"]
 
 [tool.ruff]
 line-length = 100

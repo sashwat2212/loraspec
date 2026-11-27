@@ -6,25 +6,26 @@
 
 ---
 
-## Current Status: Stage 5 Walking Skeleton (`v0.1.0-alpha`)
+## Current Status: Stage 6 Milestone 1 (`M1` — `v0.1.0`, `$0` CPU Release)
 
-This repository contains the complete **`SPEC-GATE`** 8-stage SDLC specification corpus (`docs/`, locked across Stages 0–5 with unified multi-dimensional grading) and the verified Stage 5 Python foundation:
+This repository contains the complete **`SPEC-GATE`** 8-stage SDLC specification corpus (`docs/`) and the verified **Stage 5 + Milestone 1 (`M1`)** CPU-native engineering suite:
 
-- **Bounds-Safe `.safetensors` & PEFT Inspector**: Zero-`pickle` binary header + IEEE-754 `F32`/`F16`/`BF16` tensor reader with `adapter_config.json` validation and `lora_A`/`lora_B` pairing (`src/loraspec/inspect/`).
-- **Factorized Rank-$r$ QR+SVD & Grassmann Subspace Math**: Computes singular spectra, effective stable rank $r_{\text{eff}} = \|\Delta W\|_F^2 / \|\Delta W\|_2^2$, spectral norm spikes, and pairwise **Grassmann principal angles**, **chordal similarity**, **geodesic distance**, and **directional sign conflicts** without materializing $O(d_{\text{out}} d_{\text{in}})$ matrices—supporting both pure-Python offline CPU execution and optional NumPy BLAS/LAPACK fast paths.
-- **Tier 0–1 Spectral Audit Rules & Deterministic Grading**: Evaluates `RULE-CONF-001..004` & `RULE-SPEC-001..004`, computing `MergeRiskScore (0–100)`, Grade `A–F`, and deployment policy (`SAFE_LINEAR_MERGE`, `USE_KNOTS_ALIGNMENT`, `USE_TOP_K_MOLORA`, `RETRAIN_COLLAPSED_LORA`).
-- **Atomic `GpuBudgetGuard` & `RunManifest`**: Strict INR/hour budget circuit breaker (`<= ₹3,000` ceiling, `--smoke < ₹10`) and SHA-256 adapter provenance manifests.
-- **Synchronized Reporting & Working CLI**: Emits `report.json`, `manifest.json`, and OASIS **SARIF 2.1.0** (with git-repo-relative normalized URIs) via `loraspec doctor`, `loraspec inspect`, `loraspec audit`, and `loraspec report`.
+- **Bounds-Safe `.safetensors` & PEFT Inspector (`src/loraspec/inspect/`)**: Zero-`pickle` binary header + IEEE-754 `F32`/`F16`/`BF16` tensor reader with `adapter_config.json` validation and `lora_A`/`lora_B` pairing.
+- **Factorized Rank-$r$ QR+SVD & Grassmann Subspace Math (`src/loraspec/core/`)**: Computes singular spectra, effective stable rank $r_{\text{eff}} = \|\Delta W\|_F^2 / \|\Delta W\|_2^2$, spectral norm spikes, and pairwise **Grassmann principal angles**, **chordal similarity**, **geodesic distance**, and **directional sign conflicts** without materializing $O(d_{\text{out}} d_{\text{in}})$ matrices—supporting both pure-Python offline CPU execution and optional `[spectral]` NumPy BLAS/LAPACK fast paths (`atol <= 1e-9`).
+- **Scalable Factorized `KnOTS` Joint-SVD Alignment Merger (`src/loraspec/knots/`, `loraspec merge`)**: Conditioned thin-QR + compressed $R_{\text{sum}} \times R_{\text{sum}}$ core-SVD alignment across heterogeneous ranks ($r_m \in \{4..128\}$) and `union`/`intersection` layer policies, supporting `knots_ties`, `knots_dare_ties`, `knots_linear`, factorized **`GenKnowSub`** subtraction (`--gks-adapter`), trace-identity Frobenius RMSE, `RULE-KNOTS-001` energy retention checks, and PEFT export (`adapter_model.safetensors`, `adapter_config.json`, `knots_merge_manifest.json`).
+- **Zero-CDN Offline HTML Certification Card (`--html`) & OASIS SARIF 2.1.0**: Renders self-contained `< 250 KB`, XSS-escaped (`autoescape=True`) HTML Certification Cards with inline SVG Grade/`MergeRiskScore` gauges, Grassmann chordal heatmaps, per-layer $r_{\text{eff}}/r$ rank bars, `KnOTSMergeSummary`, and `RunManifest` SHA-256 verification strips alongside repo-relative SARIF 2.1.0.
+- **Planted Subspace Fault Corpus (`benchmarks/planted_collisions/`)**: Synthetic benchmark covering 7 planted fault classes (`RULE-CONF-001/003`, `RULE-SPEC-001..004`) and 3 orthogonal/`KnOTS` controls verifying **`100%` recall (`7/7`)** and **`0.0%` false-alarm rate (`0/3`)**.
+- **`$0` CPU GitHub Marketplace Action (`action.yml`)**: Drop-in CI gate emitting live PR SARIF Code Scanning annotations and uploading HTML Certification artifacts in `< 20s` on `ubuntu-latest`.
 
-Stage 6 Milestones **M1–M4** deliver scalable `KnOTS` alignment (`merge`), offline HTML certification cards & the `$0` CPU GitHub Marketplace Action (`action.yml`), the `@triton.jit` Top-$k$ `Arrow-SGMV` kernel (`bench`), the `vLLM V1` plugin + FastAPI/React 19 Studio (`serve`, `replay`, `DEMO_REPLAY=true`), and the controlled 4-arm L4/A100 empirical benchmark.
+Upcoming Stage 6 Milestones **M2–M4** deliver the `@triton.jit` Top-$k$ `Arrow-SGMV` kernel (`bench`), the `vLLM V1` plugin + FastAPI/React 19 Studio (`serve`, `replay`, `DEMO_REPLAY=true`), and the controlled 4-arm L4/A100 empirical benchmark.
 
 ---
 
 ## Quickstart
 
 ```bash
-# Install core CLI & dev checks (zero GPU required)
-uv sync
+# Install core CLI & dev checks (zero GPU required; add --extra spectral for NumPy fast path)
+uv sync --extra spectral
 
 # 1. Check Python, CPU/MPS/CUDA backends, and optional extras
 uv run loraspec doctor
@@ -32,20 +33,46 @@ uv run loraspec doctor
 # 2. Safely inspect a PEFT LoRA adapter directory (zero-pickle)
 uv run loraspec inspect ./path/to/adapter
 
-# 3. Audit >= 2 adapters for rank collapse & Grassmann collision -> JSON + SARIF 2.1.0
+# 3. Audit >= 2 adapters for rank collapse & Grassmann collision -> JSON + SARIF 2.1.0 + HTML
 uv run loraspec audit ./adapters/sql_lora ./adapters/rust_lora \
   --out-dir ./artifacts/audit-01 \
   --sarif ./artifacts/audit-01/report.sarif \
+  --html ./artifacts/audit-01/report.html \
   --fail-on high
+
+# 4. Align & merge heterogeneous LoRAs via factorized KnOTS joint-SVD
+uv run loraspec merge ./adapters/sql_lora ./adapters/rust_lora \
+  --method knots_ties \
+  --target-rank 16 \
+  --out-dir ./artifacts/merged_knots_lora
 ```
 
-### Development Checks
+### GitHub Actions Gate (`action.yml`)
+
+```yaml
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: sashwat2212/loraspec@v1
+    with:
+      paths: "./adapters/sql_lora ./adapters/rust_lora"
+      fail-on: high
+```
+
+See [action/README.md](./action/README.md) for full inputs and outputs.
+
+### Development Checks & Planted Corpus Benchmark
 
 ```bash
 uv run ruff format --check .
 uv run ruff check .
 uv run pyright
 uv run pytest -v
+uv run python benchmarks/planted_collisions/generate_corpus.py --out-dir /tmp/loraspec-corpus --verify
 ```
 
 ---
