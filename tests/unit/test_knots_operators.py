@@ -378,3 +378,53 @@ def test_knots_dare_ties_cross_backend_rng_parity() -> None:
         )
         for row_np, row_py in zip(out_np, out_py, strict=True):
             assert row_np == pytest.approx(row_py, abs=1e-12)
+
+    # Near-zero positive drop_rate (keep_prob == 1.0 in float64) never drops at 0xFFFFFFFF
+    tiny_np = knots_dare_ties(
+        [[[1.0] * 16 for _ in range(4)], [[1.0] * 16 for _ in range(4)]][0:2],
+        weights=[0.5, 0.5],
+        density=1.0,
+        drop_rate=1e-18,
+        rng_seed=42,
+        backend="numpy",
+    )
+    tiny_py = knots_dare_ties(
+        [[[1.0] * 16 for _ in range(4)], [[1.0] * 16 for _ in range(4)]][0:2],
+        weights=[0.5, 0.5],
+        density=1.0,
+        drop_rate=1e-18,
+        rng_seed=42,
+        backend="pure_python",
+    )
+    assert all(val == pytest.approx(1.0, abs=1e-12) for row in tiny_np for val in row)
+    assert tiny_np == tiny_py
+
+
+def test_load_verified_knots_summary_rejects_nan_json(tmp_path: Path) -> None:
+    from loraspec.knots.serializer import export_peft_merged_adapter, load_verified_knots_summary
+
+    a_eye = [[1.0, 0.0], [0.0, 1.0]]
+    b_eye = [[1.0, 0.0], [0.0, 1.0]]
+    out_dir = tmp_path / "nan_manifest_dir"
+    export_peft_merged_adapter(
+        out_dir=out_dir,
+        merged_factors={"base_model.model.layers.0.self_attn.q_proj": (a_eye, b_eye)},
+        base_model_name_or_path="Qwen/Qwen2.5-3B-Instruct",
+        target_modules=["q_proj"],
+        method="knots_ties",
+        adapter_ids=["a", "b"],
+        layer_energies={"l": 1.0},
+        layer_rmses={"l": 0.0},
+        pre_conflicts=[0.0],
+        post_conflicts=[0.0],
+        source_sha256s={"a": "0" * 64, "b": "1" * 64},
+    )
+    spec = load_peft_adapter(out_dir).spec
+    assert load_verified_knots_summary(spec) is not None
+
+    manifest_file = out_dir / "knots_merge_manifest.json"
+    bad_text = manifest_file.read_text(encoding="utf-8").replace(
+        '"energy_retained": 1.0', '"energy_retained": NaN'
+    )
+    manifest_file.write_text(bad_text, encoding="utf-8")
+    assert load_verified_knots_summary(spec) is None

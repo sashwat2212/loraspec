@@ -386,13 +386,20 @@ def export_peft_merged_adapter(
     return summary, findings
 
 
+def _reject_non_finite_json(constant: str) -> object:
+    raise ValueError(f"Non-finite JSON constant '{constant}' is not allowed.")
+
+
 def load_verified_knots_summary(spec: LoRAAdapterSpec) -> KnOTSMergeSummary | None:
     """Load `knots_merge_manifest.json` iff valid and `output_sha256 == spec.weights_sha256`."""
     manifest_path = spec.root_path / "knots_merge_manifest.json"
     if not manifest_path.is_file():
         return None
     try:
-        raw: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw: object = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_non_finite_json,
+        )
         if not isinstance(raw, dict):
             return None
         raw_map = cast(dict[str, object], raw)
@@ -400,9 +407,15 @@ def load_verified_knots_summary(spec: LoRAAdapterSpec) -> KnOTSMergeSummary | No
         if not isinstance(summary_obj, dict):
             return None
         summary = KnOTSMergeSummary.model_validate(summary_obj)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValidationError):
+    except (OSError, UnicodeDecodeError, ValueError, ValidationError):
         return None
 
+    if not (
+        math.isfinite(summary.energy_retained)
+        and math.isfinite(summary.mean_reconstruction_rmse)
+        and math.isfinite(summary.sign_conflict_reduction_pct)
+    ):
+        return None
     if summary.output_sha256 != spec.weights_sha256:
         return None
     return summary

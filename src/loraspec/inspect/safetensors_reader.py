@@ -42,7 +42,7 @@ _DORA_MAG_KEY_RE = re.compile(
     r"^(?:(?P<prefix>.+)\.)?lora_magnitude_vector"
     r"(?:\.(?P<adapter>(?!weight$)[^.]+))?(?:\.weight)?$"
 )
-_REGEX_META_CHARS = frozenset("^$*+?[]()|\\")
+_REGEX_META_CHARS = frozenset("^$*+?[]{}()|\\")
 
 
 def strip_peft_base_prefix(layer_name: str) -> str:
@@ -86,20 +86,32 @@ def match_peft_pattern(
         suffix_matches.sort(reverse=True)
         return True, suffix_matches[0][3]
 
-    regex_matches: list[tuple[int, str, Any]] = []
+    regex_matches: list[tuple[int, int, str, Any]] = []
     for key, val in pattern.items():
         if not key or not any(ch in _REGEX_META_CHARS for ch in key):
             continue
         try:
-            if re.fullmatch(key, stripped) is not None or re.fullmatch(key, layer_name) is not None:
-                regex_matches.append((len(key), key, val))
+            exact_re = re.compile(key)
+            if (
+                exact_re.fullmatch(stripped) is not None
+                or exact_re.fullmatch(layer_name) is not None
+            ):
+                regex_matches.append((1, len(key), key, val))
+                continue
+            if not key.startswith("^"):
+                suffix_re = re.compile(rf".*\.(?:{key})")
+                if (
+                    suffix_re.fullmatch(stripped) is not None
+                    or suffix_re.fullmatch(layer_name) is not None
+                ):
+                    regex_matches.append((0, len(key), key, val))
         except re.error as exc:
             raise AdapterParseError(
                 f"Invalid regex key '{key}' in PEFT pattern ({config_path}): {exc}"
             ) from exc
     if regex_matches:
         regex_matches.sort(reverse=True)
-        return True, regex_matches[0][2]
+        return True, regex_matches[0][3]
 
     return False, None
 

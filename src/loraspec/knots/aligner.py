@@ -252,6 +252,7 @@ def _conditioned_core_svd(
     backend: MathBackend = "auto",
 ) -> tuple[Matrix, list[float], list[Matrix]]:
     """Conditioned factorized QR + R_sum x R_sum core SVD with zero singular-value squaring."""
+    backend = validate_math_backend(backend)
     if not scaled_bs or len(scaled_bs) != len(a_mats):
         raise AdapterParseError("scaled_bs and a_mats must be non-empty and equal length.")
 

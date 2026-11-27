@@ -21,6 +21,7 @@ from loraspec.core.spectral_math import (
 from loraspec.inspect.safetensors_reader import (
     decode_tensor_2d,
     load_peft_adapter,
+    match_peft_pattern,
     parse_safetensors_header,
     write_safetensors,
 )
@@ -667,3 +668,27 @@ def test_dora_detection_config_and_safetensors(tmp_path: Path) -> None:
     spec_mag = load_peft_adapter(mag_dir).spec
     assert spec_mag.use_dora is True
     assert spec_mag.metadata["dora_magnitude_tensor_count"] == 1
+
+
+def test_match_peft_pattern_suffix_regex_and_quantifiers() -> None:
+    # PEFT suffix-regex convention (matches module path ending with .<pattern>)
+    assert match_peft_pattern(
+        "base_model.model.layers.0.self_attn.q_proj",
+        {r"self_attn\.(q|v)_proj": 8},
+    ) == (True, 8)
+    assert match_peft_pattern(
+        "base_model.model.layers.0.mlp.gate_proj",
+        {r"self_attn\.(q|v)_proj": 8},
+    ) == (False, None)
+    # Braces quantifier `{}` without backslash/brackets still triggers regex matching
+    assert match_peft_pattern(
+        "base_model.model.layers.0.self_attn.q_proj",
+        {"layers.0{1}.self_attn.q_proj": 6},
+    ) == (True, 6)
+    # Anchored regex only matches full string, not suffix
+    assert match_peft_pattern(
+        "base_model.model.layers.0.self_attn.q_proj",
+        {"^self_attn\\.q_proj$": 8},
+    ) == (False, None)
+    with pytest.raises(AdapterParseError, match="Invalid regex"):
+        match_peft_pattern("layers.0.q_proj", {"[unclosed": 4})

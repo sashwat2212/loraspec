@@ -437,6 +437,32 @@ def test_cross_backend_full_parity_and_cli_config_wiring(
     )
     assert cli_mrg.exit_code == EXIT_PASS, cli_mrg.stdout + cli_mrg.stderr
 
+    # Restore numpy and verify GPU default_backend values fall back safely in M1
+    monkeypatch.undo()
+    for gpu_backend in ("triton_cuda", "torch_mps", "torch_cpu"):
+        gpu_toml = tmp_path / f"{gpu_backend}.toml"
+        gpu_toml.write_text(
+            f'[project]\nfail_on = "critical"\ndefault_backend = "{gpu_backend}"\n',
+            encoding="utf-8",
+        )
+        res_aud = runner.invoke(app, ["audit", str(pa), str(pb), "--config", str(gpu_toml)])
+        assert res_aud.exit_code == EXIT_PASS, res_aud.stdout + res_aud.stderr
+        res_mrg = runner.invoke(
+            app,
+            [
+                "merge",
+                str(pa),
+                str(pb),
+                "--config",
+                str(gpu_toml),
+                "--target-rank",
+                "6",
+                "--out-dir",
+                str(tmp_path / f"cli_m_{gpu_backend}"),
+            ],
+        )
+        assert res_mrg.exit_code == EXIT_PASS, res_mrg.stdout + res_mrg.stderr
+
 
 def test_heterogeneous_rank_pattern_roundtrip_and_zero_adapters(tmp_path: Path) -> None:
     """Test heterogeneous rank_pattern/alpha_pattern roundtrip and zero/near-zero adapters."""
@@ -541,6 +567,24 @@ def test_heterogeneous_rank_pattern_roundtrip_and_zero_adapters(tmp_path: Path) 
     assert all(m.frobenius_norm > 1e-12 for m in m_tiny)
     assert not any(f.rule_id == "RULE-SPEC-001" for f in f_tiny)
 
+    # Exact zero adapter triggers pre-merge RULE-SPEC-001 blocker cleanly (EXIT_AUDIT_FAIL)
+    zero_t = {
+        f"{p}.lora_A.weight": (
+            [[1.0 if j == i else 0.0 for j in range(d)] for i in range(2)],
+            "F32",
+        )
+        for p in SCALE_8_LAYERS[:4]
+    }
+    for p in SCALE_8_LAYERS[:4]:
+        zero_t[f"{p}.lora_B.weight"] = ([[0.0] * 2 for _ in range(d)], "F32")
+    p_zero = _write_adapter(tmp_path / "zero_dead", rank=2, alpha=2.0, tensors=zero_t)
+    zero_merge = runner.invoke(
+        app, ["merge", str(pa), str(p_zero), "--out-dir", str(tmp_path / "zero_out")]
+    )
+    assert zero_merge.exit_code == EXIT_AUDIT_FAIL
+    assert "RULE-SPEC-001" in zero_merge.stderr
+    assert not (tmp_path / "zero_out").exists()
+
 
 def test_dora_blocking_audit_and_merge_cli(tmp_path: Path) -> None:
     """DoRA (use_dora=True and lora_magnitude_vector) triggers RULE-CONF-002 and blocks merge."""
@@ -591,7 +635,38 @@ def test_dora_blocking_audit_and_merge_cli(tmp_path: Path) -> None:
         + struct.pack("<10f", 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0)
     )
 
-    for dora_path in (p_dora_cfg, p_dora_mag):
+    # Also construct a .safetensors with PEFT-style `.lora_magnitude_vector.default` (no `.weight`)
+    p_dora_default = tmp_path / "dora_default_key"
+    p_dora_default.mkdir()
+    (p_dora_default / "adapter_config.json").write_text(
+        (p_std / "adapter_config.json").read_text("utf-8"), encoding="utf-8"
+    )
+    hdr_def = json.dumps(
+        {
+            "base_model.model.layers.0.self_attn.q_proj.lora_A.weight": {
+                "dtype": "F32",
+                "shape": [2, 2],
+                "data_offsets": [0, 16],
+            },
+            "base_model.model.layers.0.self_attn.q_proj.lora_B.weight": {
+                "dtype": "F32",
+                "shape": [2, 2],
+                "data_offsets": [16, 32],
+            },
+            "base_model.model.layers.0.self_attn.q_proj.lora_magnitude_vector.default": {
+                "dtype": "F32",
+                "shape": [2],
+                "data_offsets": [32, 40],
+            },
+        }
+    ).encode("utf-8")
+    (p_dora_default / "adapter_model.safetensors").write_bytes(
+        struct.pack("<Q", len(hdr_def))
+        + hdr_def
+        + struct.pack("<10f", 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+    )
+
+    for dora_path in (p_dora_cfg, p_dora_mag, p_dora_default):
         aud = runner.invoke(app, ["audit", str(dora_path)])
         assert aud.exit_code == EXIT_AUDIT_FAIL
         assert "RULE-CONF-002" in aud.stdout
@@ -601,6 +676,24 @@ def test_dora_blocking_audit_and_merge_cli(tmp_path: Path) -> None:
         assert mrg.exit_code == EXIT_CONFIG_ERROR
         assert "DoRA" in mrg.stderr
         assert not out_dir.exists()
+
+    # DoRA passed via --gks-adapter is also rejected cleanly
+    gks_out = tmp_path / "blocked_gks_dora"
+    gks_mrg = runner.invoke(
+        app,
+        [
+            "merge",
+            str(p_std),
+            str(p_std),
+            "--gks-adapter",
+            str(p_dora_cfg),
+            "--out-dir",
+            str(gks_out),
+        ],
+    )
+    assert gks_mrg.exit_code == EXIT_CONFIG_ERROR
+    assert "DoRA" in gks_mrg.stderr
+    assert not gks_out.exists()
 
 
 def test_cli_exit_codes_0_to_5_and_artifacts_offline_sarif(tmp_path: Path) -> None:

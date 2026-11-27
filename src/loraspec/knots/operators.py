@@ -311,7 +311,11 @@ def _dare_drop_rescale_numpy(
     inv_keep: float,
 ) -> Any:
     rows, cols = int(arr.shape[0]), int(arr.shape[1])
-    thresh = min((1 << 32) - 1, max(0, int(keep_prob * (1 << 32))))
+    thresh = min(1 << 32, max(0, int(keep_prob * (1 << 32))))
+    if thresh >= (1 << 32):
+        return arr * inv_keep
+    if thresh <= 0:
+        return np_mod.zeros_like(arr)
     u32_thresh = np_mod.uint32(thresh)
     row_bytes = cols * 4
     mask = np_mod.empty((rows, cols), dtype=np_mod.bool_)
@@ -328,7 +332,11 @@ def _dare_drop_rescale_pure(
 ) -> Matrix:
     rows = len(mat)
     cols = len(mat[0]) if rows else 0
-    thresh = min((1 << 32) - 1, max(0, int(keep_prob * (1 << 32))))
+    thresh = min(1 << 32, max(0, int(keep_prob * (1 << 32))))
+    if thresh >= (1 << 32):
+        return [[val * inv_keep for val in row] for row in mat]
+    if thresh <= 0:
+        return [[0.0] * cols for _ in range(rows)]
     row_bytes = cols * 4
     fmt = f"<{cols}I"
     out: Matrix = []
