@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -312,3 +313,179 @@ def test_safetensors_structural_and_pairing_edge_cases(tmp_path: Path) -> None:
     assert len(f_small.active_sigmas) == 2
     assert len(f_small.u_active[0]) == 2
     assert len(f_small.v_active[0]) == 2
+
+
+@pytest.mark.parametrize("dtype", ["F32", "F16", "BF16"])
+def test_numpy_vs_pure_python_backend_numerical_parity(tmp_path: Path, dtype: str) -> None:
+    pytest.importorskip("numpy")
+
+    d_out = 12
+    d_in = 10
+    r = 4
+    layer = LoRALayerSpec(
+        layer_name="layer0.q_proj",
+        module_type="q_proj",
+        in_features=d_in,
+        out_features=d_out,
+        rank=r,
+        dtype=dtype,
+        a_key="a",
+        b_key="b",
+        a_shape=(r, d_in),
+        b_shape=(d_out, r),
+        param_count=r * (d_in + d_out),
+    )
+
+    # Distinct singular values + partially overlapping / opposing subspaces across F32/F16/BF16
+    diag_scales = [3.0, 2.0, 1.25, 0.5]
+    a1_raw = [
+        [math.cos(0.3 * (i + 1) * (j + 1)) * (0.5 if j < 6 else 0.1) for j in range(d_in)]
+        for i in range(r)
+    ]
+    b1_raw = [
+        [diag_scales[j] * math.sin(0.25 * (i + 1) * (j + 1)) for j in range(r)]
+        for i in range(d_out)
+    ]
+    a2_raw = [
+        [math.sin(0.35 * (i + 1) * (j + 2)) * (0.45 if j >= 2 else -0.3) for j in range(d_in)]
+        for i in range(r)
+    ]
+    b2_raw = [
+        [
+            diag_scales[j] * (-0.8 if j % 2 == 0 else 0.9) * math.cos(0.2 * (i + 2) * (j + 1))
+            for j in range(r)
+        ]
+        for i in range(d_out)
+    ]
+
+    st_path = write_safetensors(
+        tmp_path / f"parity_{dtype}.safetensors",
+        {
+            "a1": (a1_raw, dtype),
+            "b1": (b1_raw, dtype),
+            "a2": (a2_raw, dtype),
+            "b2": (b2_raw, dtype),
+        },
+    )
+    parsed = parse_safetensors_header(st_path)
+    a1 = decode_tensor_2d(st_path, parsed.tensors["a1"], parsed.payload_offset)
+    b1 = decode_tensor_2d(st_path, parsed.tensors["b1"], parsed.payload_offset)
+    a2 = decode_tensor_2d(st_path, parsed.tensors["a2"], parsed.payload_offset)
+    b2 = decode_tensor_2d(st_path, parsed.tensors["b2"], parsed.payload_offset)
+
+    m1_np, f1_np = compute_layer_spectral_analysis(
+        adapter_id="a1",
+        layer_spec=layer,
+        a_mat=a1,
+        b_mat=b1,
+        scaling=0.75,
+        backend="numpy",
+    )
+    m1_py, f1_py = compute_layer_spectral_analysis(
+        adapter_id="a1",
+        layer_spec=layer,
+        a_mat=a1,
+        b_mat=b1,
+        scaling=0.75,
+        backend="pure_python",
+    )
+    m2_np, f2_np = compute_layer_spectral_analysis(
+        adapter_id="a2",
+        layer_spec=layer,
+        a_mat=a2,
+        b_mat=b2,
+        scaling=1.25,
+        backend="numpy",
+    )
+    m2_py, f2_py = compute_layer_spectral_analysis(
+        adapter_id="a2",
+        layer_spec=layer,
+        a_mat=a2,
+        b_mat=b2,
+        scaling=1.25,
+        backend="pure_python",
+    )
+
+    for m_np, m_py, f_np, f_py in ((m1_np, m1_py, f1_np, f1_py), (m2_np, m2_py, f2_np, f2_py)):
+        assert m_np.spectral_norm == pytest.approx(m_py.spectral_norm, abs=1e-9)
+        assert m_np.frobenius_norm == pytest.approx(m_py.frobenius_norm, abs=1e-9)
+        assert m_np.effective_stable_rank == pytest.approx(m_py.effective_stable_rank, abs=1e-9)
+        assert m_np.rank_utilization == pytest.approx(m_py.rank_utilization, abs=1e-9)
+        assert m_np.top1_energy_ratio == pytest.approx(m_py.top1_energy_ratio, abs=1e-9)
+        assert m_np.condition_number == pytest.approx(m_py.condition_number, abs=1e-9)
+        for s_np, s_py in zip(f_np.singular_values, f_py.singular_values, strict=True):
+            assert s_np == pytest.approx(s_py, abs=1e-9)
+
+    col_np = compute_pairwise_collision(f1_np, f2_np, backend="numpy")
+    col_py = compute_pairwise_collision(f1_py, f2_py, backend="pure_python")
+    assert col_np.active_rank_a == col_py.active_rank_a
+    assert col_np.active_rank_b == col_py.active_rank_b
+    for ang_np, ang_py in zip(
+        col_np.principal_angles_deg, col_py.principal_angles_deg, strict=True
+    ):
+        assert ang_np == pytest.approx(ang_py, abs=1e-9)
+    assert col_np.cos_principal_angle_max == pytest.approx(col_py.cos_principal_angle_max, abs=1e-9)
+    assert col_np.grassmann_chordal_similarity == pytest.approx(
+        col_py.grassmann_chordal_similarity, abs=1e-9
+    )
+    assert col_np.grassmann_geodesic_dist == pytest.approx(col_py.grassmann_geodesic_dist, abs=1e-9)
+    assert col_np.row_chordal_similarity == pytest.approx(col_py.row_chordal_similarity, abs=1e-9)
+    assert col_np.sign_conflict_rate == pytest.approx(col_py.sign_conflict_rate, abs=1e-9)
+
+
+def test_spectral_audit_zero_dense_allocation_tracemalloc() -> None:
+    d_out = 4096
+    d_in = 4096
+    r = 16
+    dense_f64_bytes = d_out * d_in * 8  # 128 MiB
+
+    layer = LoRALayerSpec(
+        layer_name="base_model.model.layers.0.mlp.gate_proj",
+        module_type="gate_proj",
+        in_features=d_in,
+        out_features=d_out,
+        rank=r,
+        dtype="F32",
+        a_key="a",
+        b_key="b",
+        a_shape=(r, d_in),
+        b_shape=(d_out, r),
+        param_count=r * (d_in + d_out),
+    )
+
+    a1: list[list[float]] = [
+        [1.0 / math.sqrt(d_in) if (j % r == i) else 0.0 for j in range(d_in)] for i in range(r)
+    ]
+    b1: list[list[float]] = [
+        [1.5 / math.sqrt(d_out) if (i % r == j) else 0.0 for j in range(r)] for i in range(d_out)
+    ]
+    a2: list[list[float]] = [
+        [1.0 / math.sqrt(d_in) if ((j + 1) % r == i) else 0.0 for j in range(d_in)]
+        for i in range(r)
+    ]
+    b2: list[list[float]] = [
+        [-1.2 / math.sqrt(d_out) if ((i + 1) % r == j) else 0.0 for j in range(r)]
+        for i in range(d_out)
+    ]
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        m1, f1 = compute_layer_spectral_analysis(
+            adapter_id="a1", layer_spec=layer, a_mat=a1, b_mat=b1, scaling=1.0
+        )
+        m2, f2 = compute_layer_spectral_analysis(
+            adapter_id="a2", layer_spec=layer, a_mat=a2, b_mat=b2, scaling=1.0
+        )
+        col = compute_pairwise_collision(f1, f2)
+        _cur, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert m1.effective_stable_rank > 1.0
+    assert m2.effective_stable_rank > 1.0
+    assert 0.0 <= col.grassmann_chordal_similarity <= 1.0
+    # Peak traced memory must stay a tiny fraction of a single dense 4096x4096 float64 matrix
+    assert peak_bytes < dense_f64_bytes // 4, (
+        f"Peak traced memory {peak_bytes} bytes exceeded 32 MiB threshold ({dense_f64_bytes} dense)"
+    )

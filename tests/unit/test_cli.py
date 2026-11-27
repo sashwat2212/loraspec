@@ -50,9 +50,10 @@ def test_cli_audit_pass_fail_sarif_and_report(
     colliding_conflicting_pair: tuple[Path, Path],
     tmp_path: Path,
 ) -> None:
-    # 1. Clean orthogonal pair passes Grade A (exit 0)
+    # 1. Clean orthogonal pair passes Grade A (exit 0) + writes HTML card
     clean_out = tmp_path / "clean_out"
     clean_sarif = clean_out / "report.sarif"
+    clean_html = clean_out / "report.html"
     ok_res = runner.invoke(
         app,
         [
@@ -63,6 +64,8 @@ def test_cli_audit_pass_fail_sarif_and_report(
             str(clean_out),
             "--sarif",
             str(clean_sarif),
+            "--html",
+            str(clean_html),
         ],
     )
     assert ok_res.exit_code == EXIT_PASS, ok_res.stdout + ok_res.stderr
@@ -73,6 +76,10 @@ def test_cli_audit_pass_fail_sarif_and_report(
     assert clean_rep.merge_risk_score == 0.0
     assert (clean_out / "manifest.json").is_file()
     assert json.loads(clean_sarif.read_text(encoding="utf-8"))["version"] == "2.1.0"
+    assert clean_html.is_file()
+    assert "Grade A" in clean_html.read_text(encoding="utf-8") or "SAFE" in clean_html.read_text(
+        encoding="utf-8"
+    )
 
     # 2. Colliding conflicting pair fails Grade F (exit 1)
     vuln_out = tmp_path / "vuln_out"
@@ -107,14 +114,24 @@ def test_cli_audit_pass_fail_sarif_and_report(
     assert dup_res.exit_code == EXIT_PASS
     assert "RULE-SPEC-004" in dup_res.stdout
 
-    # 4. `loraspec report` validates and re-renders SARIF cleanly
+    # 4. `loraspec report` validates and re-renders SARIF and HTML cleanly
     rerender_sarif = tmp_path / "rerender.sarif"
+    rerender_html = tmp_path / "rerender.html"
     rep_res = runner.invoke(
         app,
-        ["report", str(vuln_out / "report.json"), "--sarif", str(rerender_sarif)],
+        [
+            "report",
+            str(vuln_out / "report.json"),
+            "--sarif",
+            str(rerender_sarif),
+            "--html",
+            str(rerender_html),
+        ],
     )
     assert rep_res.exit_code == EXIT_PASS
     assert json.loads(rerender_sarif.read_text(encoding="utf-8"))["runs"][0]["results"]
+    assert rerender_html.is_file()
+    assert "RULE-SPEC-004" in rerender_html.read_text(encoding="utf-8")
 
     bad_rep = runner.invoke(app, ["report", str(tmp_path / "missing.json")])
     assert bad_rep.exit_code == EXIT_CONFIG_ERROR
@@ -188,9 +205,8 @@ def test_cli_audit_pass_fail_sarif_and_report(
 def test_cli_stage6_stubs_exit_deterministically(
     orthogonal_adapter_pair: tuple[Path, Path],
 ) -> None:
-    path_a, path_b = orthogonal_adapter_pair
+    path_a, _ = orthogonal_adapter_pair
     for args in (
-        ["merge", str(path_a), str(path_b)],
         ["bench", str(path_a)],
         ["serve"],
         ["replay", "trace.jsonl"],
@@ -198,3 +214,70 @@ def test_cli_stage6_stubs_exit_deterministically(
         res = runner.invoke(app, args)
         assert res.exit_code == EXIT_CONFIG_ERROR
         assert "Stage 6" in res.stderr
+
+
+def test_cli_merge_validation_errors(
+    orthogonal_adapter_pair: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    path_a, path_b = orthogonal_adapter_pair
+
+    # Invalid --weights count exits 2
+    bad_weights = runner.invoke(
+        app,
+        [
+            "merge",
+            str(path_a),
+            str(path_b),
+            "--weights",
+            "1.0",
+            "--out-dir",
+            str(tmp_path / "m1"),
+        ],
+    )
+    assert bad_weights.exit_code == EXIT_CONFIG_ERROR
+
+    # Invalid --weights non-numeric exits 2
+    bad_weights_str = runner.invoke(
+        app,
+        [
+            "merge",
+            str(path_a),
+            str(path_b),
+            "--weights",
+            "abc,def",
+            "--out-dir",
+            str(tmp_path / "m2"),
+        ],
+    )
+    assert bad_weights_str.exit_code == EXIT_CONFIG_ERROR
+
+    # Unwritable --out-dir (regular file) exits 2
+    bad_file = tmp_path / "file_target.txt"
+    bad_file.write_text("x", encoding="utf-8")
+    bad_out = runner.invoke(
+        app,
+        ["merge", str(path_a), str(path_b), "--out-dir", str(bad_file)],
+    )
+    assert bad_out.exit_code == EXIT_CONFIG_ERROR
+
+    # Invalid --dtype or --layer-policy exits 2
+    bad_dtype = runner.invoke(
+        app,
+        ["merge", str(path_a), str(path_b), "--dtype", "int8", "--out-dir", str(tmp_path / "m3")],
+    )
+    assert bad_dtype.exit_code == EXIT_CONFIG_ERROR
+
+    bad_policy = runner.invoke(
+        app,
+        [
+            "merge",
+            str(path_a),
+            str(path_b),
+            "--layer-policy",
+            "outer",
+            "--out-dir",
+            str(tmp_path / "m4"),
+        ],
+    )
+    assert bad_policy.exit_code == EXIT_CONFIG_ERROR

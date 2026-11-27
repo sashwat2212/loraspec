@@ -31,8 +31,13 @@ jobs:
       - name: Pyright strict typecheck
         run: uv run pyright
 
-      - name: Unit tests
+      - name: Unit & integration tests (zero-dependency pure Python)
         run: uv run pytest -v
+
+      - name: Verify [spectral] NumPy BLAS/LAPACK numerical parity
+        run: |
+          uv sync --frozen --extra spectral
+          uv run pytest tests/unit/test_safetensors_and_math.py tests/unit/test_knots_aligner.py -v
 
       - name: CLI smoke check
         run: |

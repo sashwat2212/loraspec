@@ -1,0 +1,188 @@
+name: "loraspec Subspace Auditor"
+description: "Gate multi-LoRA PRs at $0 on CPU via Grassmann/SVD collision checks, rank-collapse probes, SARIF 2.1.0 annotations, and offline HTML cards"
+author: "loraspec contributors"
+
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  paths:
+    description: "Space- or newline-separated paths to LoRA adapter directories or .safetensors files."
+    required: false
+    default: "."
+  config:
+    description: "Optional path to loraspec.toml."
+    required: false
+    default: ""
+  tiers:
+    description: "Comma-separated audit tiers to execute ('0' or '0,1')."
+    required: false
+    default: "0,1"
+  fail-on:
+    description: "Minimum finding severity to fail the check (critical|high|medium|low|info)."
+    required: false
+    default: "high"
+  out-dir:
+    description: "Directory where report.json and manifest.json will be written."
+    required: false
+    default: "loraspec-artifacts"
+  sarif-file:
+    description: "Output path for OASIS SARIF 2.1.0 Code Scanning report."
+    required: false
+    default: "loraspec-artifacts/loraspec.sarif"
+  html-file:
+    description: "Output path for zero-CDN offline HTML Certification Card."
+    required: false
+    default: "loraspec-artifacts/loraspec.html"
+  upload-sarif:
+    description: "Upload SARIF report to GitHub Code Scanning via github/codeql-action/upload-sarif."
+    required: false
+    default: "true"
+  upload-html-artifact:
+    description: "Upload HTML Certification Card, SARIF, and JSON artifacts via actions/upload-artifact."
+    required: false
+    default: "true"
+  loraspec-package:
+    description: "Package spec or local path passed to `uvx --from` (default: 'loraspec')."
+    required: false
+    default: "loraspec"
+  python-version:
+    description: "Python version installed via astral-sh/setup-uv."
+    required: false
+    default: "3.12"
+
+outputs:
+  grade:
+    description: "Deterministic certification grade (A-F) extracted from report.json."
+    value: ${{ steps.run-loraspec.outputs.grade }}
+  merge-risk-score:
+    description: "Bounded MergeRiskScore (0.0-100.0) extracted from report.json."
+    value: ${{ steps.run-loraspec.outputs.merge_risk_score }}
+  sarif-file:
+    description: "Path to emitted SARIF 2.1.0 file."
+    value: ${{ inputs.sarif-file }}
+  html-file:
+    description: "Path to emitted zero-CDN offline HTML Certification Card."
+    value: ${{ inputs.html-file }}
+  report-json:
+    description: "Path to emitted AuditReport JSON file."
+    value: ${{ steps.run-loraspec.outputs.report_json }}
+  exit-code:
+    description: "Raw exit code returned by `loraspec audit` (0-5)."
+    value: ${{ steps.run-loraspec.outputs.exit_code }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+        python-version: ${{ inputs.python-version }}
+
+    - name: Run loraspec audit
+      id: run-loraspec
+      shell: bash
+      env:
+        LORASPEC_PACKAGE: ${{ inputs.loraspec-package }}
+        LORASPEC_PATHS: ${{ inputs.paths }}
+        LORASPEC_CONFIG: ${{ inputs.config }}
+        LORASPEC_TIERS: ${{ inputs.tiers }}
+        LORASPEC_FAIL_ON: ${{ inputs.fail-on }}
+        LORASPEC_OUT_DIR: ${{ inputs.out-dir }}
+        LORASPEC_SARIF_FILE: ${{ inputs.sarif-file }}
+        LORASPEC_HTML_FILE: ${{ inputs.html-file }}
+      run: |
+        set -uo pipefail
+        mkdir -p "$LORASPEC_OUT_DIR"
+
+        adapter_paths=()
+        while IFS= read -r -d '' entry; do
+          adapter_paths+=("$entry")
+        done < <(python3 -c '
+        import os, shlex, sys
+        raw = os.environ.get("LORASPEC_PATHS", "").strip()
+        parts = shlex.split(raw) if raw else ["."]
+        for p in parts:
+            sys.stdout.buffer.write(p.encode("utf-8") + b"\0")
+        ')
+
+        cmd=(
+          uvx --from "$LORASPEC_PACKAGE" loraspec audit "${adapter_paths[@]}"
+          --tiers "$LORASPEC_TIERS"
+          --fail-on "$LORASPEC_FAIL_ON"
+          --out-dir "$LORASPEC_OUT_DIR"
+          --sarif "$LORASPEC_SARIF_FILE"
+          --html "$LORASPEC_HTML_FILE"
+        )
+
+        if [ -n "$LORASPEC_CONFIG" ]; then
+          cmd+=(--config "$LORASPEC_CONFIG")
+        fi
+
+        set +e
+        "${cmd[@]}"
+        rc=$?
+        set -e
+
+        report_json="${LORASPEC_OUT_DIR}/report.json"
+        echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"
+        echo "report_json=${report_json}" >> "$GITHUB_OUTPUT"
+
+        if [ -f "$report_json" ]; then
+          python3 - "$report_json" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
+        import json, sys
+        report_path, out_path, summary_path = sys.argv[1:4]
+        data = json.loads(open(report_path, encoding="utf-8").read())
+        grade = str(data.get("grade", "UNKNOWN"))
+        score = data.get("merge_risk_score")
+        score_str = f"{float(score):.2f}" if isinstance(score, (int, float)) else "n/a"
+        adapters = [str(a.get("adapter_id", "?")) for a in (data.get("adapters") or [])]
+        findings = data.get("findings") or []
+        recs = ", ".join(str(r) for r in (data.get("recommendations") or [])) or "n/a"
+        with open(out_path, "a", encoding="utf-8") as fh:
+            fh.write(f"grade={grade}\n")
+            fh.write(f"merge_risk_score={score_str}\n")
+        if summary_path:
+            adapter_label = ", ".join(adapters) if adapters else "none"
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write(f"### loraspec Subspace Certification: `{adapter_label}`\n\n")
+                fh.write("| Metric | Value |\n|---|---|\n")
+                fh.write(f"| **Grade** | **{grade}** |\n")
+                fh.write(f"| **MergeRiskScore** | `{score_str} / 100.0` |\n")
+                fh.write(f"| **Adapters Audited** | `{len(adapters)}` |\n")
+                fh.write(f"| **Findings** | `{len(findings)}` |\n")
+                fh.write(f"| **Recommendations** | `{recs}` |\n\n")
+        PY
+        else
+          echo "grade=UNKNOWN" >> "$GITHUB_OUTPUT"
+          echo "merge_risk_score=n/a" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: always() && inputs.upload-sarif == 'true' && hashFiles(inputs.sarif-file) != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+
+    - name: Upload HTML Certification Card & JSON Artifacts
+      if: always() && inputs.upload-html-artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: loraspec-certification-report
+        path: |
+          ${{ inputs.out-dir }}
+          ${{ inputs.html-file }}
+          ${{ inputs.sarif-file }}
+        if-no-files-found: warn
+
+    - name: Propagate loraspec audit exit code
+      if: steps.run-loraspec.outputs.exit_code != '0'
+      shell: bash
+      env:
+        LORASPEC_EXIT_CODE: ${{ steps.run-loraspec.outputs.exit_code }}
+      run: |
+        echo "loraspec audit failed with exit code ${LORASPEC_EXIT_CODE}." >&2
+        exit "$LORASPEC_EXIT_CODE"
+
