@@ -40,6 +40,7 @@ def arrow_molora_reference(
     temperature: float = 1.0,
     layer_name: str = "molora_layer",
     backend_label: TelemetryBackend | None = None,
+    include_telemetry: bool = True,
 ) -> tuple[Any, MoLoRARouteTelemetryBatch]:
     """FP32-accumulated PyTorch reference Arrow-MoLoRA forward (100% MPS/CPU/CUDA safe)."""
     torch_mod = optional_torch()
@@ -176,6 +177,17 @@ def arrow_molora_reference(
         y_slots[tok_ids, slot_ids, :] = delta_seg
 
     y_out_2d = (base_2d.to(dtype=torch_mod.float32) + y_slots.sum(dim=1)).to(dtype=base_2d.dtype)
+    if not include_telemetry:
+        telemetry = MoLoRARouteTelemetryBatch(
+            layer_name=layer_name,
+            num_tokens=num_tokens,
+            top_k=top_k,
+            expert_indices=[],
+            routing_weights=[],
+            router_entropy=[],
+            backend=resolved_label,
+        )
+        return y_out_2d.reshape(base_out.shape), telemetry
     telemetry = MoLoRARouteTelemetryBatch(
         layer_name=layer_name,
         num_tokens=num_tokens,
@@ -361,6 +373,7 @@ def peft_eager_arrow_forward(
     top_k: int = 2,
     temperature: float = 1.0,
     layer_name: str = "molora_layer",
+    include_telemetry: bool = True,
 ) -> tuple[Any, MoLoRARouteTelemetryBatch]:
     """Eager un-fused `peft`-style Arrow baseline allocating per-expert [T, d_out] outputs."""
     if _is_torch_tensor(x):
@@ -375,7 +388,11 @@ def peft_eager_arrow_forward(
         num_tokens = int(x_2d.shape[0])
 
         expert_ids, routing_weights, entropy = route_topk_tokens(
-            x_2d, prototypes, top_k=top_k, temperature=temperature
+            x_2d,
+            prototypes,
+            top_k=top_k,
+            temperature=temperature,
+            compute_entropy=include_telemetry,
         )
         backend_lbl = _infer_torch_backend(device)
         if num_tokens == 0:
@@ -417,6 +434,16 @@ def peft_eager_arrow_forward(
         y_out_2d = (base_2d.to(dtype=torch_mod.float32) + stacked.sum(dim=0)).to(
             dtype=base_2d.dtype
         )
+        if not include_telemetry:
+            return y_out_2d.reshape(base_out.shape), MoLoRARouteTelemetryBatch(
+                layer_name=layer_name,
+                num_tokens=num_tokens,
+                top_k=top_k,
+                expert_indices=[],
+                routing_weights=[],
+                router_entropy=[],
+                backend=backend_lbl,
+            )
         telemetry = MoLoRARouteTelemetryBatch(
             layer_name=layer_name,
             num_tokens=num_tokens,

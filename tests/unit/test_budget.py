@@ -46,6 +46,7 @@ async def test_smoke_cap_and_local_zero_cost() -> None:
     l4_res = await smoke_guard.reserve_or_raise("e2e_l4_24gb", 60.0)
     actual = await smoke_guard.reconcile(l4_res, 30.0)
     assert actual == pytest.approx(57.82 * (30.0 / 3600.0), rel=1e-5)
+    assert smoke_guard.hourly_rate("e2e_a30_24gb") == pytest.approx(106.20, rel=1e-5)
     assert smoke_guard.total_gpu_hours > 1.0  # includes 1h local_cpu + 30s L4
 
 

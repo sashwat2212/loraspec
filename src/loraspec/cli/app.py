@@ -596,7 +596,7 @@ def bench(
         typer.Option(
             "--hardware",
             help="Hardware profile: auto | local_cpu | local_mps | demo_replay | "
-            "e2e_l4_24gb | e2e_a100_80gb.",
+            "e2e_l4_24gb | e2e_a30_24gb | e2e_a100_80gb.",
         ),
     ] = "auto",
     max_cost_inr: Annotated[

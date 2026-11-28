@@ -54,6 +54,7 @@ class ArrowMoLoRADispatcher:
         backend: DispatchBackend = "auto",
         *,
         layer_name: str | None = None,
+        include_telemetry: bool = True,
     ) -> tuple[Any, MoLoRARouteTelemetryBatch]:
         """Execute per-token Top-k Arrow-MoLoRA forward pass on the resolved backend."""
         if backend not in VALID_DISPATCH_BACKENDS:
@@ -94,6 +95,7 @@ class ArrowMoLoRADispatcher:
                 top_k=top_k,
                 temperature=temperature,
                 layer_name=resolved_layer,
+                include_telemetry=include_telemetry,
             )
 
         if backend == "torch_mps":
@@ -117,6 +119,7 @@ class ArrowMoLoRADispatcher:
                 top_k=top_k,
                 temperature=temperature,
                 layer_name=resolved_layer,
+                include_telemetry=include_telemetry,
             )
 
         if backend == "torch_cpu":
@@ -139,6 +142,7 @@ class ArrowMoLoRADispatcher:
                 top_k=top_k,
                 temperature=temperature,
                 layer_name=resolved_layer,
+                include_telemetry=include_telemetry,
             )
 
         if backend == "torch_reference":
@@ -163,6 +167,7 @@ class ArrowMoLoRADispatcher:
                     temperature=temperature,
                     layer_name=resolved_layer,
                     backend_label=dev_label,
+                    include_telemetry=include_telemetry,
                 )
             target = "mps" if has_mps() else "cpu"
             label: Literal["torch_mps", "torch_cpu"] = (
@@ -182,6 +187,7 @@ class ArrowMoLoRADispatcher:
                 top_k=top_k,
                 temperature=temperature,
                 layer_name=resolved_layer,
+                include_telemetry=include_telemetry,
             )
 
         # backend == "auto"
@@ -212,6 +218,7 @@ class ArrowMoLoRADispatcher:
                 top_k=top_k,
                 temperature=temperature,
                 layer_name=resolved_layer,
+                include_telemetry=include_telemetry,
             )
 
         auto_label: Literal["torch_mps", "torch_cpu"] = (
@@ -229,6 +236,7 @@ class ArrowMoLoRADispatcher:
             temperature=temperature,
             layer_name=resolved_layer,
             backend_label=auto_label,
+            include_telemetry=include_telemetry,
         )
 
     @staticmethod
@@ -277,6 +285,7 @@ class ArrowMoLoRADispatcher:
         top_k: int,
         temperature: float,
         layer_name: str,
+        include_telemetry: bool = True,
     ) -> tuple[Any, MoLoRARouteTelemetryBatch]:
         def _move(val: Any, dtype: Any) -> Any:
             if isinstance(val, torch_mod.Tensor):
@@ -303,6 +312,7 @@ class ArrowMoLoRADispatcher:
             temperature=temperature,
             layer_name=layer_name,
             backend_label=backend_label,
+            include_telemetry=include_telemetry,
         )
 
     @staticmethod
@@ -318,6 +328,7 @@ class ArrowMoLoRADispatcher:
         top_k: int,
         temperature: float,
         layer_name: str,
+        include_telemetry: bool = True,
     ) -> tuple[Any, MoLoRARouteTelemetryBatch]:
         torch_mod = optional_torch()
         assert torch_mod is not None
@@ -341,7 +352,11 @@ class ArrowMoLoRADispatcher:
         num_tokens = int(x_2d.shape[0])
 
         expert_ids, routing_weights, entropy = route_topk_tokens(
-            x_2d, prototypes, top_k=top_k, temperature=temperature
+            x_2d,
+            prototypes,
+            top_k=top_k,
+            temperature=temperature,
+            compute_entropy=include_telemetry,
         )
         if num_tokens == 0:
             telemetry = MoLoRARouteTelemetryBatch(
@@ -355,7 +370,12 @@ class ArrowMoLoRADispatcher:
             )
             return base_out.clone(), telemetry
 
-        layout = build_segment_metadata(expert_ids, routing_weights, num_experts)
+        layout = build_segment_metadata(
+            expert_ids,
+            routing_weights,
+            num_experts,
+            validate_ranges=False,
+        )
         y_out = triton_arrow_sgmv_forward(
             x=x,
             base_out=base_out,
@@ -365,6 +385,17 @@ class ArrowMoLoRADispatcher:
             scalings=scalings,
             segment_layout=layout,
         )
+        if not include_telemetry:
+            telemetry = MoLoRARouteTelemetryBatch(
+                layer_name=layer_name,
+                num_tokens=num_tokens,
+                top_k=top_k,
+                expert_indices=[],
+                routing_weights=[],
+                router_entropy=[],
+                backend="triton_cuda",
+            )
+            return y_out, telemetry
         telemetry = MoLoRARouteTelemetryBatch(
             layer_name=layer_name,
             num_tokens=num_tokens,

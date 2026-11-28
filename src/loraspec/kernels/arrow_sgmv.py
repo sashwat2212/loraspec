@@ -108,6 +108,9 @@ def build_segment_metadata(
     expert_ids: Any,
     routing_weights: Any,
     num_experts: int,
+    *,
+    validate_ranges: bool = True,
+    max_segment_len_upper_bound: int | None = None,
 ) -> SegmentLayout:
     """Sort Top-k token-slot assignments by expert_id without Python loops over tokens."""
     num_experts_val = _require_pos_int(num_experts, "num_experts")
@@ -154,21 +157,28 @@ def build_segment_metadata(
         flat_experts = expert_ids.reshape(-1).to(dtype=torch_mod.int64)
         flat_weights = routing_weights.reshape(-1).to(dtype=torch_mod.float32)
 
-        if bool((flat_experts < 0).any()) or bool((flat_experts >= num_experts_val).any()):
+        if validate_ranges and bool(((flat_experts < 0) | (flat_experts >= num_experts_val)).any()):
             raise ConfigError(
                 f"expert_ids contain out-of-range values outside [0, {num_experts_val})."
             )
 
-        total_assigns = int(flat_experts.numel())
-        composite_key = flat_experts * total_assigns + torch_mod.arange(
-            total_assigns, device=device, dtype=torch_mod.int64
-        )
-        perm = torch_mod.argsort(composite_key)
+        if bool(expert_ids.is_cuda):
+            perm = torch_mod.argsort(flat_experts, stable=True)
+        else:
+            total_assigns = int(flat_experts.numel())
+            composite_key = flat_experts * total_assigns + torch_mod.arange(
+                total_assigns, device=device, dtype=torch_mod.int64
+            )
+            perm = torch_mod.argsort(composite_key)
         sorted_token_ids = (perm // top_k).to(dtype=torch_mod.int32)
         sorted_slots = (perm % top_k).to(dtype=torch_mod.int32)
         sorted_weights = flat_weights[perm]
 
-        if num_experts_val <= 128:
+        if bool(expert_ids.is_cuda):
+            expert_counts = torch_mod.bincount(flat_experts, minlength=num_experts_val).to(
+                dtype=torch_mod.int32
+            )
+        elif num_experts_val <= 128:
             expert_grid = torch_mod.arange(num_experts_val, device=device, dtype=torch_mod.int64)
             expert_counts = (
                 (flat_experts[:, None] == expert_grid[None, :]).sum(dim=0).to(dtype=torch_mod.int32)
@@ -193,7 +203,11 @@ def build_segment_metadata(
             (num_experts_val + 1,), dtype=torch_mod.int32, device=device
         )
         expert_offsets[1:] = torch_mod.cumsum(expert_counts, dim=0).to(dtype=torch_mod.int32)
-        max_segment_len = int(expert_counts.max().item()) if num_experts_val > 0 else 0
+        max_segment_len = (
+            int(max_segment_len_upper_bound)
+            if max_segment_len_upper_bound is not None
+            else (int(expert_counts.max().item()) if num_experts_val > 0 else 0)
+        )
 
         return SegmentLayout(
             sorted_token_ids=sorted_token_ids,
@@ -290,27 +304,27 @@ _EXPAND_AUTOTUNE_CONFIGS = [
 
 @triton.autotune(configs=_SHRINK_AUTOTUNE_CONFIGS, key=["d_in", "r_max"])
 @triton.jit
-def _arrow_sgmv_shrink_kernel(
-    X_ptr: Any,
-    A_ptr: Any,
-    H_ptr: Any,
-    sorted_token_ids_ptr: Any,
-    expert_offsets_ptr: Any,
-    ranks_ptr: Any,
-    d_in: int,
-    r_max: int,
-    stride_xm: Any,
-    stride_xk: Any,
-    stride_ae: Any,
-    stride_ar: Any,
-    stride_ak: Any,
-    stride_hm: Any,
-    stride_hr: Any,
+def _arrow_sgmv_shrink_kernel(  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    X_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    A_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    H_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    sorted_token_ids_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    expert_offsets_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    ranks_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    d_in,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    r_max,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_xm,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_xk,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_ae,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_ar,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_ak,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_hm,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_hr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
     IS_FP32: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_R: tl.constexpr,
-) -> None:
+):
     if r_max <= 0:
         return
     pid_e = tl.program_id(0)
@@ -341,20 +355,20 @@ def _arrow_sgmv_shrink_kernel(
     token_ids = tl.load(sorted_token_ids_ptr + seg_pos, mask=m_mask, other=0).to(tl.int64)
 
     acc = tl.zeros((BLOCK_M, BLOCK_R), dtype=tl.float32)
-    a_expert_ptr = A_ptr + pid_e_i64 * stride_ae
+    a_expert_ptr = A_ptr + pid_e_i64 * stride_ae  # pyright: ignore[reportUnknownVariableType]
 
-    for k_start in range(0, d_in, BLOCK_K):
+    for k_start in range(0, d_in, BLOCK_K):  # pyright: ignore[reportUnknownArgumentType]
         offs_k = k_start + tl.arange(0, BLOCK_K)
-        k_mask = offs_k < d_in
+        k_mask = offs_k < d_in  # pyright: ignore[reportUnknownVariableType]
 
-        x_ptrs = (
+        x_ptrs = (  # pyright: ignore[reportUnknownVariableType]
             X_ptr
             + token_ids.to(tl.int64)[:, None] * stride_xm
             + (offs_k.to(tl.int64)[None, :] * stride_xk)
         )
         x_tile = tl.load(x_ptrs, mask=m_mask[:, None] & k_mask[None, :], other=0.0)
 
-        a_ptrs = (
+        a_ptrs = (  # pyright: ignore[reportUnknownVariableType]
             a_expert_ptr
             + offs_r.to(tl.int64)[:, None] * stride_ar
             + offs_k.to(tl.int64)[None, :] * stride_ak
@@ -366,7 +380,7 @@ def _arrow_sgmv_shrink_kernel(
         else:
             acc += tl.dot(x_tile, tl.trans(a_tile))
 
-    h_ptrs = (
+    h_ptrs = (  # pyright: ignore[reportUnknownVariableType]
         H_ptr + seg_pos.to(tl.int64)[:, None] * stride_hm + offs_r.to(tl.int64)[None, :] * stride_hr
     )
     tl.store(h_ptrs, acc, mask=m_mask[:, None] & r_mask[None, :])
@@ -374,31 +388,32 @@ def _arrow_sgmv_shrink_kernel(
 
 @triton.autotune(configs=_EXPAND_AUTOTUNE_CONFIGS, key=["d_out", "r_max"])
 @triton.jit
-def _arrow_sgmv_expand_kernel(
-    H_ptr: Any,
-    B_ptr: Any,
-    Y_slots_ptr: Any,
-    sorted_token_ids_ptr: Any,
-    sorted_slots_ptr: Any,
-    sorted_weights_ptr: Any,
-    expert_offsets_ptr: Any,
-    ranks_ptr: Any,
-    scalings_ptr: Any,
-    d_out: Any,
-    r_max: Any,
-    stride_hm: Any,
-    stride_hr: Any,
-    stride_be: Any,
-    stride_bn: Any,
-    stride_br: Any,
-    stride_yt: Any,
-    stride_ys: Any,
-    stride_yn: Any,
+def _arrow_sgmv_expand_kernel(  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    H_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    B_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    Y_slots_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    sorted_token_ids_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    sorted_slots_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    sorted_weights_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    expert_offsets_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    ranks_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    scalings_ptr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    d_out,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    r_max,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_hm,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_hr,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_be,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_bn,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_br,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_yt,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_ys,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
+    stride_yn,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
     IS_FP32: tl.constexpr,
+    IS_BF16: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_R: tl.constexpr,
-) -> None:
+):
     if r_max <= 0:
         return
     pid_e = tl.program_id(0)
@@ -421,7 +436,7 @@ def _arrow_sgmv_expand_kernel(
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     m_mask = offs_m < seg_len
-    n_mask = offs_n < d_out
+    n_mask = offs_n < d_out  # pyright: ignore[reportUnknownVariableType]
 
     seg_pos = seg_start.to(tl.int64) + offs_m.to(tl.int64)
     token_ids = tl.load(sorted_token_ids_ptr + seg_pos, mask=m_mask, other=0).to(tl.int64)
@@ -430,20 +445,20 @@ def _arrow_sgmv_expand_kernel(
     scaling_e = tl.load(scalings_ptr + pid_e_i64)
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    b_expert_ptr = B_ptr + pid_e_i64 * stride_be
+    b_expert_ptr = B_ptr + pid_e_i64 * stride_be  # pyright: ignore[reportUnknownVariableType]
 
     for r_start in range(0, rank_e, BLOCK_R):
         offs_r = r_start + tl.arange(0, BLOCK_R)
         r_mask = offs_r < rank_e
 
-        h_ptrs = (
+        h_ptrs = (  # pyright: ignore[reportUnknownVariableType]
             H_ptr
             + seg_pos.to(tl.int64)[:, None] * stride_hm
             + offs_r.to(tl.int64)[None, :] * stride_hr
         )
         h_tile = tl.load(h_ptrs, mask=m_mask[:, None] & r_mask[None, :], other=0.0)
 
-        b_ptrs = (
+        b_ptrs = (  # pyright: ignore[reportUnknownVariableType]
             b_expert_ptr
             + offs_n.to(tl.int64)[:, None] * stride_bn
             + offs_r.to(tl.int64)[None, :] * stride_br
@@ -452,13 +467,16 @@ def _arrow_sgmv_expand_kernel(
 
         if IS_FP32:
             acc += tl.dot(h_tile, tl.trans(b_tile), input_precision="ieee")
+        elif IS_BF16:
+            b_tile_fp32 = b_tile.to(tl.float32)  # pyright: ignore[reportUnknownVariableType]
+            acc += tl.dot(h_tile, tl.trans(b_tile_fp32))
         else:
             acc += tl.dot(h_tile.to(b_tile.dtype), tl.trans(b_tile))
 
     row_scale = weights * scaling_e
     scaled_acc = row_scale[:, None] * acc
 
-    y_ptrs = (
+    y_ptrs = (  # pyright: ignore[reportUnknownVariableType]
         Y_slots_ptr
         + token_ids.to(tl.int64)[:, None] * stride_yt
         + slot_ids.to(tl.int64)[:, None] * stride_ys
@@ -569,11 +587,12 @@ def triton_arrow_sgmv_forward(
     offsets_c = segment_layout.expert_offsets.to(dtype=torch_mod.int32).contiguous()
 
     total_assigns = num_tokens * segment_layout.top_k
-    h_sorted = torch_mod.zeros((total_assigns, r_max), dtype=torch_mod.float32, device=x_2d.device)
+    h_sorted = torch_mod.empty((total_assigns, r_max), dtype=torch_mod.float32, device=x_2d.device)
     y_slots = torch_mod.zeros(
         (num_tokens, segment_layout.top_k, d_out), dtype=torch_mod.float32, device=x_2d.device
     )
     is_fp32 = bool(x_2d.dtype == torch_mod.float32)
+    is_bf16 = bool(x_2d.dtype == torch_mod.bfloat16)
 
     def grid_shrink(meta: dict[str, int]) -> tuple[int, int, int]:
         return (
@@ -629,6 +648,7 @@ def triton_arrow_sgmv_forward(
         y_slots.stride(1),
         y_slots.stride(2),
         IS_FP32=is_fp32,
+        IS_BF16=is_bf16,
     )
 
     y_out_2d = (base_2d.to(dtype=torch_mod.float32) + y_slots.sum(dim=1)).to(dtype=base_2d.dtype)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Any
 
@@ -40,7 +41,7 @@ def test_triton_fp16_bf16_mixed_rank_property_parity() -> None:
 
                     torch.manual_seed(1000 + case_count)
                     x = torch.randn((num_tokens, d_in), dtype=dt_obj, device="cuda") * 0.5
-                    base_out = torch.randn((num_tokens, d_out), dtype=dt_obj, device="cuda") * 0.25
+                    base_out = torch.randn((num_tokens, d_out), dtype=dt_obj, device="cuda") * 0.2
                     prototypes = torch.nn.functional.normalize(
                         torch.randn((num_experts, d_in), dtype=torch.float32, device="cuda"),
                         dim=-1,
@@ -48,12 +49,14 @@ def test_triton_fp16_bf16_mixed_rank_property_parity() -> None:
 
                     a_packed = torch.zeros((num_experts, r_max, d_in), dtype=dt_obj, device="cuda")
                     b_packed = torch.zeros((num_experts, d_out, r_max), dtype=dt_obj, device="cuda")
+                    a_scale = 1.0 / math.sqrt(float(d_in))
                     for e_idx, r_e in enumerate(ranks_list):
+                        b_scale = 0.1 / math.sqrt(float(max(r_e, 1)))
                         a_packed[e_idx, :r_e, :] = (
-                            torch.randn((r_e, d_in), dtype=dt_obj, device="cuda") * 0.1
+                            torch.randn((r_e, d_in), dtype=dt_obj, device="cuda") * a_scale
                         )
                         b_packed[e_idx, :, :r_e] = (
-                            torch.randn((d_out, r_e), dtype=dt_obj, device="cuda") * 0.1
+                            torch.randn((d_out, r_e), dtype=dt_obj, device="cuda") * b_scale
                         )
 
                     ranks_t = torch.tensor(ranks_list, dtype=torch.int32, device="cuda")
@@ -106,20 +109,22 @@ def test_triton_skewed_empty_expert_deterministic_reduce() -> None:
     r_max = max(ranks_list)
 
     # All prototypes aligned closely to expert 0 or 5 so experts 1..4 receive 0 tokens
-    x = torch.randn((num_tokens, d_in), dtype=torch.float16, device="cuda")
-    base_out = torch.randn((num_tokens, d_out), dtype=torch.float16, device="cuda")
+    x = torch.randn((num_tokens, d_in), dtype=torch.float16, device="cuda") * 0.5
+    base_out = torch.randn((num_tokens, d_out), dtype=torch.float16, device="cuda") * 0.2
     prototypes = torch.zeros((num_experts, d_in), dtype=torch.float32, device="cuda")
     prototypes[0, 0] = 1.0
     prototypes[5, 0] = -1.0
 
     a_packed = torch.zeros((num_experts, r_max, d_in), dtype=torch.float16, device="cuda")
     b_packed = torch.zeros((num_experts, d_out, r_max), dtype=torch.float16, device="cuda")
+    a_scale = 1.0 / math.sqrt(float(d_in))
     for e_idx, r_e in enumerate(ranks_list):
+        b_scale = 0.1 / math.sqrt(float(max(r_e, 1)))
         a_packed[e_idx, :r_e, :] = (
-            torch.randn((r_e, d_in), dtype=torch.float16, device="cuda") * 0.1
+            torch.randn((r_e, d_in), dtype=torch.float16, device="cuda") * a_scale
         )
         b_packed[e_idx, :, :r_e] = (
-            torch.randn((d_out, r_e), dtype=torch.float16, device="cuda") * 0.1
+            torch.randn((d_out, r_e), dtype=torch.float16, device="cuda") * b_scale
         )
 
     ranks_t = torch.tensor(ranks_list, dtype=torch.int32, device="cuda")

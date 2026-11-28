@@ -47,7 +47,15 @@ _PARITY_TOLERANCE_BY_DTYPE: dict[BenchDtype, float] = {
 }
 
 _VALID_HARDWARE_INPUTS: frozenset[str] = frozenset(
-    {"auto", "local_cpu", "local_mps", "demo_replay", "e2e_l4_24gb", "e2e_a100_80gb"}
+    {
+        "auto",
+        "local_cpu",
+        "local_mps",
+        "demo_replay",
+        "e2e_l4_24gb",
+        "e2e_a30_24gb",
+        "e2e_a100_80gb",
+    }
 )
 
 
@@ -83,6 +91,8 @@ def resolve_bench_hardware(hardware: str) -> str:
                 dev_name = str(torch_mod.cuda.get_device_name(0)).upper()
                 if "A100" in dev_name:
                     return "e2e_a100_80gb"
+                if "A30" in dev_name:
+                    return "e2e_a30_24gb"
             except Exception:
                 pass
         return "e2e_l4_24gb"
@@ -116,17 +126,20 @@ def _build_synthetic_prototype_bank(
         p_norm = max(math.sqrt(sum(v * v for v in p_raw)), 1e-12)
         protos.append([v / p_norm for v in p_raw])
 
+        std_a = 1.0 / math.sqrt(float(max(d_in, 1)))
+        std_b = 0.05 / math.sqrt(float(max(r_e, 1)))
+
         a_mat: Matrix = []
         for r in range(r_max):
             if r < r_e:
-                a_mat.append([rng.gauss(0.0, 0.05) for _ in range(d_in)])
+                a_mat.append([rng.gauss(0.0, std_a) for _ in range(d_in)])
             else:
                 a_mat.append([0.0] * d_in)
         a_packed.append(a_mat)
 
         b_mat: Matrix = []
         for _ in range(d_out):
-            row = [rng.gauss(0.0, 0.05) if r < r_e else 0.0 for r in range(r_max)]
+            row = [rng.gauss(0.0, std_b) if r < r_e else 0.0 for r in range(r_max)]
             b_mat.append(row)
         b_packed.append(b_mat)
 
@@ -397,12 +410,14 @@ async def async_run_kernel_parity_and_roofline_bench(
     use_mps = has_mps() and not use_cuda and resolved_hw != "local_cpu"
 
     if synthetic:
-        num_experts = max(4, top_k_val)
         if torch_mod is not None and use_cuda:
-            syn_d_in, syn_d_out = 512, 512
+            num_experts = max(8, top_k_val)
+            syn_d_in, syn_d_out = 4096, 2048
         elif torch_mod is not None:
+            num_experts = max(4, top_k_val)
             syn_d_in, syn_d_out = 128, 128
         else:
+            num_experts = max(4, top_k_val)
             syn_d_in, syn_d_out = 48, 48
         bank = _build_synthetic_prototype_bank(
             num_experts=num_experts, d_in=syn_d_in, d_out=syn_d_out, seed=seed
@@ -514,7 +529,7 @@ async def async_run_kernel_parity_and_roofline_bench(
                     )
                     base_t = (
                         torch_mod.randn((num_tokens, d_out), dtype=dtype_obj, device=exec_device)
-                        * 0.25
+                        * 0.2
                     )
                     proto_t, a_t, b_t, ranks_t, scalings_t = bank.layer_tensors(
                         target_layer, device=exec_device, dtype=dtype_obj
@@ -584,6 +599,7 @@ async def async_run_kernel_parity_and_roofline_bench(
                         top_k=top_k_val,
                         temperature=temp_val,
                         layer_name=target_layer,
+                        include_telemetry=False,
                     )
                     _, peft_ms, peft_vram = _measure_torch_arm(
                         torch_mod,
@@ -669,6 +685,7 @@ async def async_run_kernel_parity_and_roofline_bench(
                         temperature=temp_val,
                         backend=dispatch_backend,
                         layer_name=target_layer,
+                        include_telemetry=False,
                     )
                     _, sgmv_ms, sgmv_vram = _measure_torch_arm(
                         torch_mod,

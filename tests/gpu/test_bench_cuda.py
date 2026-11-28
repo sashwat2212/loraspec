@@ -20,7 +20,7 @@ def test_bench_l4_roofline_and_peft_speedup(tmp_path: Path) -> None:
         synthetic=True,
         top_k=2,
         batch_sizes=[16, 32],
-        seq_len=32,
+        seq_len=64,
         dtypes=["fp16", "bf16"],
         hardware="auto",
         smoke=False,
@@ -34,4 +34,5 @@ def test_bench_l4_roofline_and_peft_speedup(tmp_path: Path) -> None:
         assert pt.hbm_bandwidth_gb_s > 0.0
         tol = 1e-3 if pt.dtype == "fp16" else 5e-3
         assert pt.max_abs_err_vs_ref <= tol
-    assert summary.speedup_vs_peft_eager > 1.0
+    assert summary.speedup_vs_peft_eager >= 2.0
+    assert summary.vram_savings_pct >= 30.0

@@ -14,6 +14,7 @@ GpuHardwareProfile = Literal[
     "local_mps",
     "demo_replay",
     "e2e_l4_24gb",
+    "e2e_a30_24gb",
     "e2e_a100_80gb",
 ]
 
@@ -22,6 +23,7 @@ DEFAULT_RATE_TABLE_INR_PER_HR: dict[str, float] = {
     "local_mps": 0.0,
     "demo_replay": 0.0,
     "e2e_l4_24gb": 57.82,
+    "e2e_a30_24gb": 106.20,
     "e2e_a100_80gb": 223.02,
 }
 
