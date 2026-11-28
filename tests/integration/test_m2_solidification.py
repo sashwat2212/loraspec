@@ -205,9 +205,9 @@ def test_triton_kernel_ast_invariants() -> None:
             for dcall in dot_calls
         )
 
-    # Stage 2 casts h_tile.to(b_tile.dtype) when not IS_FP32
+    # Stage 2 keeps h_tile in tl.float32 and promotes b_tile to tl.float32 for exact projection
     expand_src = ast.unparse(expand_fn)
-    assert "h_tile.to(b_tile.dtype)" in expand_src
+    assert "b_tile.to(tl.float32)" in expand_src
     assert "Y_slots_ptr" in expand_src
 
     # 6. Zero tl.atomic_add anywhere in arrow_sgmv.py and deterministic slot sum in forward

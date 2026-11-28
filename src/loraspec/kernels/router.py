@@ -413,6 +413,7 @@ def route_topk_tokens(
     *,
     top_k: int = 2,
     temperature: float = 1.0,
+    compute_entropy: bool = True,
 ) -> tuple[Any, Any, Any]:
     """Compute sign-invariant cosine Top-k expert routing, softmax weights, and entropy."""
     top_k_val = _require_positive_int(top_k, "top_k")
@@ -467,39 +468,59 @@ def route_topk_tokens(
             )
 
         x_fp32 = x_2d.to(dtype=torch_mod.float32)
-        p_fp32 = proto_t.to(dtype=torch_mod.float32)
-        x_sq_sum = (x_fp32 * x_fp32).sum(dim=-1, keepdim=True).clamp(min=0.0)
-        x_norm = torch_mod.sqrt(x_sq_sum).clamp(min=eps)
-        x_hat = x_fp32 / x_norm
-        scores = torch_mod.abs(x_hat @ p_fp32.transpose(0, 1))  # [T, K] >= 0.0
-
-        # Deterministic smallest-index tie-breaking in pure FP32 tensor ops (MPS/CUDA/CPU safe)
-        work_scores = scores.clone()
-        k_indices = torch_mod.arange(num_experts, device=device, dtype=torch_mod.float32)[None, :]
-        sentinel = torch_mod.full(
-            (num_tokens, num_experts), float(num_experts), dtype=torch_mod.float32, device=device
+        p_fp32 = (
+            proto_t if proto_t.dtype == torch_mod.float32 else proto_t.to(dtype=torch_mod.float32)
         )
-        neg_mask_val = torch_mod.full((num_tokens, 1), -1.0, dtype=torch_mod.float32, device=device)
-        selected_ids: list[Any] = []
-        selected_scores: list[Any] = []
-        for _ in range(top_k_val):
-            max_vals = work_scores.max(dim=-1, keepdim=True).values
-            is_max = work_scores == max_vals
-            cand_idx = torch_mod.where(is_max, k_indices, sentinel)
-            best_idx_long = cand_idx.min(dim=-1).values.to(dtype=torch_mod.int64)
-            best_val = scores.gather(-1, best_idx_long[:, None])
-            selected_ids.append(best_idx_long.to(dtype=torch_mod.int32))
-            selected_scores.append(best_val.squeeze(-1))
-            work_scores.scatter_(-1, best_idx_long[:, None], neg_mask_val)
+        raw_abs = torch_mod.abs(x_fp32 @ p_fp32.transpose(0, 1))  # [T, K] >= 0.0
+        x_norm = torch_mod.linalg.vector_norm(x_fp32, dim=-1, keepdim=True).clamp(min=eps)
+        scores = raw_abs / x_norm
 
-        expert_ids = torch_mod.stack(selected_ids, dim=-1)  # [T, top_k] int32
-        top_scores = torch_mod.stack(selected_scores, dim=-1)  # [T, top_k] float32
+        if bool(x_2d.is_cuda):
+            # Stable descending argsort preserves smallest-index tie-breaking without a Python loop
+            sorted_idx = torch_mod.argsort(scores, dim=-1, descending=True, stable=True)[
+                :, :top_k_val
+            ]
+            top_scores = scores.gather(-1, sorted_idx)
+            expert_ids = sorted_idx.to(dtype=torch_mod.int32)
+        else:
+            # Deterministic smallest-index tie-breaking in pure FP32 tensor ops (MPS/CPU safe)
+            work_scores = scores.clone()
+            k_indices = torch_mod.arange(num_experts, device=device, dtype=torch_mod.float32)[
+                None, :
+            ]
+            sentinel = torch_mod.full(
+                (num_tokens, num_experts),
+                float(num_experts),
+                dtype=torch_mod.float32,
+                device=device,
+            )
+            neg_mask_val = torch_mod.full(
+                (num_tokens, 1), -1.0, dtype=torch_mod.float32, device=device
+            )
+            selected_ids: list[Any] = []
+            selected_scores: list[Any] = []
+            for _ in range(top_k_val):
+                max_vals = work_scores.max(dim=-1, keepdim=True).values
+                is_max = work_scores == max_vals
+                cand_idx = torch_mod.where(is_max, k_indices, sentinel)
+                best_idx_long = cand_idx.min(dim=-1).values.to(dtype=torch_mod.int64)
+                best_val = scores.gather(-1, best_idx_long[:, None])
+                selected_ids.append(best_idx_long.to(dtype=torch_mod.int32))
+                selected_scores.append(best_val.squeeze(-1))
+                work_scores.scatter_(-1, best_idx_long[:, None], neg_mask_val)
+
+            expert_ids = torch_mod.stack(selected_ids, dim=-1)  # [T, top_k] int32
+            top_scores = torch_mod.stack(selected_scores, dim=-1)  # [T, top_k] float32
 
         scaled = top_scores / temp_f
         scaled_shifted = scaled - scaled.max(dim=-1, keepdim=True).values
         exp_vals = torch_mod.exp(scaled_shifted)
         routing_weights = exp_vals / exp_vals.sum(dim=-1, keepdim=True)
-        entropy = compute_router_entropy(routing_weights, eps=eps)
+        entropy = (
+            compute_router_entropy(routing_weights, eps=eps)
+            if compute_entropy
+            else torch_mod.empty((0,), dtype=torch_mod.float32, device=device)
+        )
         return expert_ids, routing_weights, entropy
 
     # Pure-Python path

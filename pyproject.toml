@@ -46,7 +46,8 @@ spectral = [
     "safetensors>=0.4.3",
 ]
 kernels = [
-    "torch>=2.2",
+    "torch>=2.2,<2.11; sys_platform == 'linux'",
+    "torch>=2.2; sys_platform != 'linux'",
     "triton>=3.0; sys_platform == 'linux'",
 ]
 

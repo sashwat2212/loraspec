@@ -47,6 +47,8 @@ def test_cli_bench_smoke_cpu_budget_guarded(
             "4",
             "--dtypes",
             "fp16,bf16",
+            "--hardware",
+            "local_cpu",
             "--out-dir",
             str(syn_out),
         ],
