@@ -212,3 +212,21 @@ class BenchmarkSuiteSummary(BaseModel):
     speedup_vs_peft_eager: float
     vram_savings_pct: float
     arm_accuracy_pass_at_1: dict[str, float] = Field(default_factory=dict)
+
+
+class KnOTSPreviewRequest(BaseModel):
+    adapter_paths: list[str]
+    method: Literal["knots_ties", "knots_dare_ties", "knots_linear"] = "knots_ties"
+    target_rank: int = Field(default=16, ge=1, le=256)
+    ties_density: float = Field(default=0.50, gt=0.0, le=1.0)
+    dare_drop_rate: float = Field(default=0.20, ge=0.0, lt=1.0)
+    use_gks: bool = False
+    gks_adapter_path: str | None = None
+    rng_seed: int = 42
+
+
+class KnOTSPreviewResponse(BaseModel):
+    summary: KnOTSMergeSummary
+    pre_knots_sign_conflict_rate: float
+    post_knots_sign_conflict_rate: float
+    findings: list[AuditFinding] = Field(default_factory=list[AuditFinding])

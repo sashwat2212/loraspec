@@ -204,15 +204,22 @@ def test_cli_audit_pass_fail_sarif_and_report(
 
 def test_cli_stage6_stubs_exit_deterministically(
     orthogonal_adapter_pair: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     path_a, _ = orthogonal_adapter_pair
-    for args in (
-        ["serve"],
-        ["replay", "trace.jsonl"],
-    ):
-        res = runner.invoke(app, args)
-        assert res.exit_code == EXIT_CONFIG_ERROR
-        assert "Stage 6" in res.stderr
+
+    # All M3 CLI commands (`serve`, `replay`) and M2 (`bench`) are active (no Stage 6 stubs left)
+    bad_port = runner.invoke(app, ["serve", "--port", "0"])
+    assert bad_port.exit_code == EXIT_CONFIG_ERROR
+    assert "Stage 6" not in bad_port.stderr
+
+    no_replay_live = runner.invoke(app, ["serve", "--no-demo-replay"])
+    assert no_replay_live.exit_code in (EXIT_CONFIG_ERROR, 4)
+    assert "Stage 6" not in no_replay_live.stderr
+
+    missing_trace = runner.invoke(app, ["replay", str(tmp_path / "does_not_exist.jsonl")])
+    assert missing_trace.exit_code == EXIT_CONFIG_ERROR
+    assert "Stage 6" not in missing_trace.stderr
 
     # `bench` is active in M2: single adapter with default --top-k 2 raises ConfigError (exit 2)
     single_bench = runner.invoke(app, ["bench", str(path_a)])

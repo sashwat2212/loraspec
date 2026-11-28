@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "loraspec"
-version = "0.2.0"
+version = "0.3.0"
 description = "LoRA Subspace Auditor (KnOTS) & Per-Token Top-k MoLoRA Triton Studio — pre-flight Grassmann/SVD collision SARIF auditor, factorized KnOTS alignment merger, and @triton.jit Arrow-SGMV multi-LoRA serving engine."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -50,9 +50,21 @@ kernels = [
     "torch>=2.2; sys_platform != 'linux'",
     "triton>=3.0; sys_platform == 'linux'",
 ]
+serving = [
+    "vllm>=0.6.4; sys_platform == 'linux'",
+    "peft>=0.12.0",
+]
+studio = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "websockets>=12.0",
+]
 
-# Optional serving/studio extras ([serving], [studio]) are added in M3;
-# core CLI + Stage 5/M1 auditing & KnOTS merging run 100% pure-Python CPU or with [spectral].
+[project.entry-points."vllm.general_plugins"]
+loraspec_molora = "loraspec.serving.vllm_plugin:register"
+
+# Core CLI + Stage 5/M1 auditing & KnOTS merging run 100% pure-Python CPU or with [spectral];
+# [studio] + [spectral] power DEMO_REPLAY=true zero-GPU FastAPI/WebSocket gateway & React Studio.
 
 [project.urls]
 Homepage = "https://github.com/sashwat2212/loraspec"
@@ -79,7 +91,7 @@ artifacts = ["src/loraspec/reporting/templates/*.j2"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-extend-exclude = ["docs", "benchmarks/planted_collisions"]
+extend-exclude = ["docs", "benchmarks/planted_collisions", "ui"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

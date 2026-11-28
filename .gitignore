@@ -16,6 +16,8 @@ htmlcov/
 # Frontend Studio
 ui/node_modules/
 ui/dist/
+ui/playwright-report/
+ui/test-results/
 
 # Local artifacts & secrets
 .env

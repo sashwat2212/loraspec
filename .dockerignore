@@ -1,0 +1,14 @@
+.git
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+dist
+ui/node_modules
+ui/dist
+ui/playwright-report
+ui/test-results
+tests
+benchmarks
+docs
+

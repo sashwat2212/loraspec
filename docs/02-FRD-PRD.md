@@ -840,11 +840,9 @@ class BenchmarkSuiteSummary(BaseModel):
     speedup_vs_peft_eager: float
     vram_savings_pct: float
     arm_accuracy_pass_at_1: dict[str, float] = Field(default_factory=dict)
-```
 
-#### B. Stage 6 M3 Planned Extension Schemas *(Scheduled for M3 addition in `src/loraspec/core/schemas.py`)*
-```python
-class KnOTSPreviewRequest(BaseModel):  # Planned: M3 (SDD-04)
+
+class KnOTSPreviewRequest(BaseModel):
     adapter_paths: list[str]
     method: Literal["knots_ties", "knots_dare_ties", "knots_linear"] = "knots_ties"
     target_rank: int = Field(default=16, ge=1, le=256)
@@ -855,12 +853,15 @@ class KnOTSPreviewRequest(BaseModel):  # Planned: M3 (SDD-04)
     rng_seed: int = 42
 
 
-class KnOTSPreviewResponse(BaseModel):  # Planned: M3 (SDD-04)
+class KnOTSPreviewResponse(BaseModel):
     summary: KnOTSMergeSummary
     pre_knots_sign_conflict_rate: float
     post_knots_sign_conflict_rate: float
     findings: list[AuditFinding] = Field(default_factory=list[AuditFinding])
 ```
+
+#### B. Stage 6 Extension Schemas Status
+All domain Pydantic v2 schemas (`AuditReport`, `KnOTSMergeSummary`, `MoLoRARouteTelemetryBatch`, `KernelBenchmarkPoint`, `BenchmarkSuiteSummary`, `KnOTSPreviewRequest`, `KnOTSPreviewResponse`) are promoted and verified in `src/loraspec/core/schemas.py` through Milestone 3 (`v0.3.0`).
 
 ### 5.2 FastAPI Studio REST, SSE & WebSocket API Contract (M3 / `SDD-04`)
 
