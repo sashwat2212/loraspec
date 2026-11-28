@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import importlib.util
+import json
+import os
 import platform
 import sys
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 import typer
 from rich.console import Console
@@ -25,9 +29,11 @@ from loraspec.core.errors import (
     EXIT_AUDIT_FAIL,
     EXIT_CONFIG_ERROR,
     EXIT_PASS,
+    EXIT_RUNTIME_ERROR,
     AdapterParseError,
     ConfigError,
     LoraspecError,
+    RuntimeExecutionError,
 )
 from loraspec.core.manifest import build_run_manifest, detect_accelerator_backend
 from loraspec.core.schemas import AuditReport, Severity, meets_fail_threshold
@@ -355,15 +361,6 @@ def report(
             f"(Grade {loaded.grade}, MergeRiskScore={loaded.merge_risk_score:.2f}, "
             f"{len(loaded.findings)} finding(s))."
         )
-
-
-def _stage6_stub(command_name: str, milestone: str) -> None:
-    typer.echo(
-        f"`loraspec {command_name}` is scheduled for Stage 6 ({milestone}). "
-        "Available in M2: `doctor`, `inspect`, `audit`, `merge`, `bench`, `report`.",
-        err=True,
-    )
-    raise typer.Exit(code=EXIT_CONFIG_ERROR)
 
 
 def _parse_merge_weights(raw_weights: str | None) -> list[float] | None:
@@ -734,25 +731,166 @@ def bench(
 
 @app.command()
 def serve(
-    host: Annotated[str, typer.Option("--host", help="Bind host.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", help="Bind port.")] = 8000,
+    host: Annotated[str | None, typer.Option("--host", help="Bind host.")] = None,
+    port: Annotated[int | None, typer.Option("--port", help="Bind port.")] = None,
     demo_replay: Annotated[
-        bool, typer.Option("--demo-replay", help="Serve recorded telemetry at ₹0.")
-    ] = True,
+        bool | None,
+        typer.Option("--demo-replay/--no-demo-replay", help="Serve recorded telemetry at ₹0."),
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Base model identifier for live serving.")
+    ] = None,
+    adapters: Annotated[
+        list[Path] | None, typer.Option("--adapters", help="Mounted PEFT adapter directories.")
+    ] = None,
+    top_k: Annotated[int | None, typer.Option("--top-k", help="Top-k active adapters.")] = None,
+    temperature: Annotated[
+        float | None, typer.Option("--temperature", help="Router softmax temperature.")
+    ] = None,
+    replay_dir: Annotated[
+        Path | None, typer.Option("--replay-dir", help="Custom replay bundle directory.")
+    ] = None,
+    config: Annotated[
+        Path | None, typer.Option("--config", help="Optional path to loraspec.toml.")
+    ] = None,
 ) -> None:
-    """Launch FastAPI gateway + WebSocket telemetry + React 19 Studio (Stage 6 M3)."""
-    _ = (host, port, demo_replay)
-    _stage6_stub("serve", "M3")
+    """Launch FastAPI gateway + WebSocket telemetry + React 19 Studio."""
+    _ = model
+    try:
+        cfg = load_config(config)
+        resolved_host = host if host is not None else cfg.studio.host
+        resolved_port = port if port is not None else cfg.studio.port
+        resolved_demo = demo_replay if demo_replay is not None else cfg.studio.demo_replay
+        resolved_top_k = top_k if top_k is not None else cfg.molora.top_k
+        resolved_temp = temperature if temperature is not None else cfg.molora.router_temperature
+
+        if resolved_port < 1 or resolved_port > 65535:
+            raise ConfigError(f"--port must be in [1, 65535], got {resolved_port}.")
+        if resolved_top_k < 1:
+            raise ConfigError(f"--top-k must be >= 1, got {resolved_top_k}.")
+        if resolved_temp <= 0.0:
+            raise ConfigError(f"--temperature must be > 0.0, got {resolved_temp}.")
+
+        if not resolved_demo:
+            has_vllm = importlib.util.find_spec("vllm") is not None
+            if not has_vllm or detect_accelerator_backend() != "triton_cuda":
+                raise RuntimeExecutionError(
+                    "Live `loraspec serve --no-demo-replay` requires NVIDIA CUDA + Triton + vLLM. "
+                    "Pass `--demo-replay` to serve verified L4/A100 telemetry traces at ₹0."
+                )
+
+        if (
+            importlib.util.find_spec("uvicorn") is None
+            or importlib.util.find_spec("fastapi") is None
+        ):
+            raise RuntimeExecutionError(
+                "Studio web dependencies (`fastapi`, `uvicorn`) are missing. "
+                "Install `loraspec[studio]`."
+            )
+
+        os.environ["DEMO_REPLAY"] = "true" if resolved_demo else "false"
+        gateway_mod = importlib.import_module("loraspec.serving.gateway")
+        uvicorn_mod = importlib.import_module("uvicorn")
+        fastapi_app = cast(Any, gateway_mod).create_app(
+            demo_replay=resolved_demo,
+            replay_dir=replay_dir,
+            adapter_paths=adapters,
+        )
+    except LoraspecError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    cast(Any, uvicorn_mod).run(
+        fastapi_app, host=resolved_host, port=resolved_port, log_level="info"
+    )
 
 
 @app.command()
 def replay(
     trace_path: Annotated[Path, typer.Argument(help="Recorded MoLoRA telemetry JSONL trace.")],
-    speed: Annotated[float, typer.Option("--speed", help="Replay speed multiplier.")] = 1.0,
+    speed: Annotated[
+        float, typer.Option("--speed", help="Replay speed multiplier (<= 0.0 for instant).")
+    ] = 1.0,
+    ws_url: Annotated[
+        str | None, typer.Option("--ws-url", help="Optional WebSocket URL to push trace frames.")
+    ] = None,
+    json_stream: Annotated[
+        bool, typer.Option("--json-stream", help="Emit raw NDJSON telemetry frames to stdout.")
+    ] = False,
 ) -> None:
-    """Stream a recorded L4/A100 MoLoRA token-routing session (Stage 6 M3)."""
-    _ = (trace_path, speed)
-    _stage6_stub("replay", "M3")
+    """Stream a recorded L4/A100 MoLoRA token-routing session."""
+    from loraspec.serving.demo_replay import load_replay_trace, stream_replay_frames
+
+    try:
+        sessions = load_replay_trace(trace_path)
+    except LoraspecError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+
+    eff_speed = 0.0 if speed <= 0.0 else float(speed)
+
+    async def _run_replay() -> list[dict[str, Any]]:
+        emitted: list[dict[str, Any]] = []
+        ws_client: Any = None
+        if ws_url:
+            if importlib.util.find_spec("websockets") is None:
+                raise RuntimeExecutionError(
+                    "`websockets` package is required for `--ws-url`. Install `loraspec[studio]`."
+                )
+            ws_mod = importlib.import_module("websockets")
+            async with cast(Any, ws_mod).connect(ws_url) as ws_client:
+                for session in sessions:
+                    async for frame in stream_replay_frames(session, speed=eff_speed):
+                        await ws_client.send(json.dumps(frame))
+                        emitted.append(frame)
+                        if json_stream:
+                            typer.echo(json.dumps(frame))
+            return emitted
+
+        for session in sessions:
+            async for frame in stream_replay_frames(session, speed=eff_speed):
+                emitted.append(frame)
+                if json_stream:
+                    typer.echo(json.dumps(frame))
+        return emitted
+
+    try:
+        emitted_frames = asyncio.run(_run_replay())
+    except LoraspecError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=exc.exit_code) from exc
+    except OSError as exc:
+        typer.echo(f"WebSocket connection error: {exc}", err=True)
+        raise typer.Exit(code=EXIT_RUNTIME_ERROR) from exc
+
+    if not json_stream:
+        for session in sessions:
+            rtable = Table(
+                title=(
+                    f"MoLoRA Trace Replay: {rich_escape(session.replay_id)} "
+                    f"({rich_escape(session.hardware_profile)})"
+                )
+            )
+            rtable.add_column("Idx", justify="right")
+            rtable.add_column("Token")
+            rtable.add_column("Top-k Adapters")
+            rtable.add_column("Weights")
+            rtable.add_column("Entropy", justify="right")
+            rtable.add_column("ITL (ms)", justify="right")
+            for f in session.frames:
+                rtable.add_row(
+                    str(f.token_index),
+                    rich_escape(repr(f.token_text)),
+                    rich_escape(", ".join(f.top_k_adapters)),
+                    ", ".join(f"{w:.3f}" for w in f.top_k_weights),
+                    f"{f.router_entropy:.4f}",
+                    f"{f.itl_ms:.2f}",
+                )
+            console.print(rtable)
+        console.print(
+            f"[bold]Replayed {len(sessions)} session(s)[/bold] | Frames={len(emitted_frames)} | "
+            f"TTFT={sessions[0].ttft_ms:.1f}ms | Mean ITL={sessions[0].mean_itl_ms:.2f}ms"
+        )
 
 
 def main() -> None:

@@ -59,3 +59,32 @@ jobs:
           uv run --no-sync pytest tests/unit/test_arrow_router.py tests/unit/test_kernel_reference_parity.py tests/unit/test_bench_smoke.py tests/integration/test_m2_solidification.py -v
           uv run --no-sync loraspec bench --synthetic --smoke --out-dir /tmp/ci-bench
           rm -rf /tmp/ci-bench
+
+      - name: Verify [studio] FastAPI gateway & vLLM plugin integration
+        run: |
+          uv sync --frozen --extra spectral --extra studio
+          uv run --no-sync loraspec doctor
+          uv run --no-sync pytest tests/integration/test_vllm_plugin.py tests/integration/test_gateway_replay.py -v
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build React 19 Studio & run Playwright E2E + XSS suite
+        working-directory: ui
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npm run build
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      - name: Verify multi-stage Docker container & <30s DEMO_REPLAY healthcheck
+        run: |
+          docker compose up -d --build --wait
+          curl -fsS http://127.0.0.1:8000/health
+          curl -fsS http://127.0.0.1:8000/ >/dev/null
+          docker compose down -v

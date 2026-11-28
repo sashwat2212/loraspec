@@ -1,0 +1,617 @@
+{
+  "schema_version": "1.0.0",
+  "manifest": {
+    "run_id": "99fa4f70-cefd-42e8-b24e-930f45998688",
+    "loraspec_version": "0.3.0",
+    "timestamp_utc": "2026-11-28T11:12:45.031798+00:00",
+    "git_sha": "44aafd8",
+    "host_os": "darwin",
+    "host_arch": "arm64",
+    "accelerator_backend": "torch_cpu",
+    "adapter_sha256s": {
+      "json-lora": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "math-lora": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+      "python-lora": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+      "rust-lora": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "sql-lora": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    "rng_seed": 42,
+    "total_gpu_cost_inr": 0.0,
+    "cli_args": [
+      "audit",
+      "adapters/sql-lora",
+      "adapters/rust-lora",
+      "adapters/json-lora",
+      "adapters/math-lora",
+      "adapters/python-lora"
+    ]
+  },
+  "adapters": [
+    {
+      "adapter_id": "sql-lora",
+      "adapter_format": "peft_safetensors",
+      "root_path": "adapters/sql-lora",
+      "weights_path": "adapters/sql-lora/adapter_model.safetensors",
+      "config_path": "adapters/sql-lora/adapter_config.json",
+      "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+      "peft_type": "LORA",
+      "rank": 16,
+      "lora_alpha": 32.0,
+      "scaling": 2.0,
+      "lora_dropout": 0.0,
+      "use_rslora": false,
+      "use_dora": false,
+      "bias": "none",
+      "target_modules": [
+        "q_proj",
+        "v_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "total_lora_params": 2752512,
+      "weights_sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "layers": [
+        {
+          "layer_name": "base_model.model.layers.12.mlp.down_proj",
+          "module_type": "down_proj",
+          "in_features": 4096,
+          "out_features": 2048,
+          "rank": 16,
+          "lora_alpha": 32.0,
+          "scaling": 2.0,
+          "dtype": "BF16",
+          "a_key": "base_model.model.layers.12.mlp.down_proj.lora_A.weight",
+          "b_key": "base_model.model.layers.12.mlp.down_proj.lora_B.weight",
+          "a_shape": [
+            16,
+            4096
+          ],
+          "b_shape": [
+            2048,
+            16
+          ],
+          "param_count": 98304
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "adapter_id": "rust-lora",
+      "adapter_format": "peft_safetensors",
+      "root_path": "adapters/rust-lora",
+      "weights_path": "adapters/rust-lora/adapter_model.safetensors",
+      "config_path": "adapters/rust-lora/adapter_config.json",
+      "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+      "peft_type": "LORA",
+      "rank": 32,
+      "lora_alpha": 64.0,
+      "scaling": 2.0,
+      "lora_dropout": 0.0,
+      "use_rslora": false,
+      "use_dora": false,
+      "bias": "none",
+      "target_modules": [
+        "q_proj",
+        "v_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "total_lora_params": 5505024,
+      "weights_sha256": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "layers": [
+        {
+          "layer_name": "base_model.model.layers.12.mlp.down_proj",
+          "module_type": "down_proj",
+          "in_features": 4096,
+          "out_features": 2048,
+          "rank": 32,
+          "lora_alpha": 64.0,
+          "scaling": 2.0,
+          "dtype": "BF16",
+          "a_key": "base_model.model.layers.12.mlp.down_proj.lora_A.weight",
+          "b_key": "base_model.model.layers.12.mlp.down_proj.lora_B.weight",
+          "a_shape": [
+            32,
+            4096
+          ],
+          "b_shape": [
+            2048,
+            32
+          ],
+          "param_count": 196608
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "adapter_id": "json-lora",
+      "adapter_format": "peft_safetensors",
+      "root_path": "adapters/json-lora",
+      "weights_path": "adapters/json-lora/adapter_model.safetensors",
+      "config_path": "adapters/json-lora/adapter_config.json",
+      "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+      "peft_type": "LORA",
+      "rank": 8,
+      "lora_alpha": 16.0,
+      "scaling": 2.0,
+      "lora_dropout": 0.0,
+      "use_rslora": false,
+      "use_dora": false,
+      "bias": "none",
+      "target_modules": [
+        "q_proj",
+        "v_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "total_lora_params": 1376256,
+      "weights_sha256": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "layers": [
+        {
+          "layer_name": "base_model.model.layers.12.mlp.down_proj",
+          "module_type": "down_proj",
+          "in_features": 4096,
+          "out_features": 2048,
+          "rank": 8,
+          "lora_alpha": 16.0,
+          "scaling": 2.0,
+          "dtype": "BF16",
+          "a_key": "base_model.model.layers.12.mlp.down_proj.lora_A.weight",
+          "b_key": "base_model.model.layers.12.mlp.down_proj.lora_B.weight",
+          "a_shape": [
+            8,
+            4096
+          ],
+          "b_shape": [
+            2048,
+            8
+          ],
+          "param_count": 49152
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "adapter_id": "math-lora",
+      "adapter_format": "peft_safetensors",
+      "root_path": "adapters/math-lora",
+      "weights_path": "adapters/math-lora/adapter_model.safetensors",
+      "config_path": "adapters/math-lora/adapter_config.json",
+      "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+      "peft_type": "LORA",
+      "rank": 16,
+      "lora_alpha": 32.0,
+      "scaling": 2.0,
+      "lora_dropout": 0.0,
+      "use_rslora": false,
+      "use_dora": false,
+      "bias": "none",
+      "target_modules": [
+        "q_proj",
+        "v_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "total_lora_params": 2752512,
+      "weights_sha256": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+      "layers": [
+        {
+          "layer_name": "base_model.model.layers.12.mlp.down_proj",
+          "module_type": "down_proj",
+          "in_features": 4096,
+          "out_features": 2048,
+          "rank": 16,
+          "lora_alpha": 32.0,
+          "scaling": 2.0,
+          "dtype": "BF16",
+          "a_key": "base_model.model.layers.12.mlp.down_proj.lora_A.weight",
+          "b_key": "base_model.model.layers.12.mlp.down_proj.lora_B.weight",
+          "a_shape": [
+            16,
+            4096
+          ],
+          "b_shape": [
+            2048,
+            16
+          ],
+          "param_count": 98304
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "adapter_id": "python-lora",
+      "adapter_format": "peft_safetensors",
+      "root_path": "adapters/python-lora",
+      "weights_path": "adapters/python-lora/adapter_model.safetensors",
+      "config_path": "adapters/python-lora/adapter_config.json",
+      "base_model_name_or_path": "Qwen/Qwen2.5-3B-Instruct",
+      "peft_type": "LORA",
+      "rank": 32,
+      "lora_alpha": 64.0,
+      "scaling": 2.0,
+      "lora_dropout": 0.0,
+      "use_rslora": false,
+      "use_dora": false,
+      "bias": "none",
+      "target_modules": [
+        "q_proj",
+        "v_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "total_lora_params": 5505024,
+      "weights_sha256": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+      "layers": [
+        {
+          "layer_name": "base_model.model.layers.12.mlp.down_proj",
+          "module_type": "down_proj",
+          "in_features": 4096,
+          "out_features": 2048,
+          "rank": 32,
+          "lora_alpha": 64.0,
+          "scaling": 2.0,
+          "dtype": "BF16",
+          "a_key": "base_model.model.layers.12.mlp.down_proj.lora_A.weight",
+          "b_key": "base_model.model.layers.12.mlp.down_proj.lora_B.weight",
+          "a_shape": [
+            32,
+            4096
+          ],
+          "b_shape": [
+            2048,
+            32
+          ],
+          "param_count": 196608
+        }
+      ],
+      "metadata": {}
+    }
+  ],
+  "grade": "C",
+  "merge_risk_score": 44.6,
+  "findings": [
+    {
+      "rule_id": "RULE-SPEC-004",
+      "title": "Elevated subspace collision between rust-lora and python-lora",
+      "severity": "high",
+      "tier": 1,
+      "source": "loraspec",
+      "file_path": "adapters/rust-lora/adapter_model.safetensors",
+      "line_number": null,
+      "evidence": "layers.12.mlp.down_proj Grassmann chordal similarity 0.62 >= 0.45 with 44.0% sign conflict.",
+      "remediation": "Route tokens dynamically via Top-k MoLoRA (Arrow-SGMV) or apply factorized KnOTS TIES alignment."
+    },
+    {
+      "rule_id": "RULE-SPEC-004",
+      "title": "Moderate systems subspace overlap between math-lora and python-lora",
+      "severity": "high",
+      "tier": 1,
+      "source": "loraspec",
+      "file_path": "adapters/math-lora/adapter_model.safetensors",
+      "line_number": null,
+      "evidence": "layers.12.mlp.down_proj Grassmann chordal similarity 0.54 >= 0.45 with 39.0% sign conflict.",
+      "remediation": "Use Top-k MoLoRA or KnOTS rank r>=32 alignment to prevent arithmetic interference."
+    },
+    {
+      "rule_id": "RULE-CONF-004",
+      "title": "Heterogeneous LoRA ranks across adapters ({8, 16, 32})",
+      "severity": "low",
+      "tier": 0,
+      "source": "config_probe",
+      "file_path": "adapters/json-lora/adapter_config.json",
+      "line_number": null,
+      "evidence": "Adapter fleet mixes ranks r=8 (json-lora), r=16 (sql/math), and r=32 (rust/python).",
+      "remediation": "Zero-pad heterogeneous ranks cleanly in KnOTS or masked Triton Arrow-SGMV segments."
+    }
+  ],
+  "layer_metrics": [
+    {
+      "adapter_id": "sql-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "module_type": "down_proj",
+      "rank": 16,
+      "singular_values": [
+        1.92,
+        1.38,
+        1.04,
+        0.78,
+        0.54,
+        0.39,
+        0.24,
+        0.14
+      ],
+      "spectral_norm": 1.92,
+      "frobenius_norm": 2.7932,
+      "effective_stable_rank": 11.4,
+      "rank_utilization": 0.71,
+      "top1_energy_ratio": 0.29,
+      "condition_number": 13.71,
+      "has_non_finite": false
+    },
+    {
+      "adapter_id": "rust-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "module_type": "down_proj",
+      "rank": 32,
+      "singular_values": [
+        2.45,
+        1.88,
+        1.49,
+        1.12,
+        0.89,
+        0.67,
+        0.48,
+        0.31
+      ],
+      "spectral_norm": 2.45,
+      "frobenius_norm": 3.8182,
+      "effective_stable_rank": 21.8,
+      "rank_utilization": 0.68,
+      "top1_energy_ratio": 0.24,
+      "condition_number": 7.9,
+      "has_non_finite": false
+    },
+    {
+      "adapter_id": "json-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "module_type": "down_proj",
+      "rank": 8,
+      "singular_values": [
+        1.55,
+        1.18,
+        0.84,
+        0.56,
+        0.35,
+        0.19,
+        0.09,
+        0.04
+      ],
+      "spectral_norm": 1.55,
+      "frobenius_norm": 2.2321,
+      "effective_stable_rank": 5.6,
+      "rank_utilization": 0.7,
+      "top1_energy_ratio": 0.31,
+      "condition_number": 38.75,
+      "has_non_finite": false
+    },
+    {
+      "adapter_id": "math-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "module_type": "down_proj",
+      "rank": 16,
+      "singular_values": [
+        2.14,
+        1.72,
+        1.29,
+        0.94,
+        0.66,
+        0.44,
+        0.27,
+        0.16
+      ],
+      "spectral_norm": 2.14,
+      "frobenius_norm": 3.2884,
+      "effective_stable_rank": 12.1,
+      "rank_utilization": 0.76,
+      "top1_energy_ratio": 0.26,
+      "condition_number": 13.38,
+      "has_non_finite": false
+    },
+    {
+      "adapter_id": "python-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "module_type": "down_proj",
+      "rank": 32,
+      "singular_values": [
+        2.38,
+        1.79,
+        1.41,
+        1.06,
+        0.81,
+        0.58,
+        0.41,
+        0.25
+      ],
+      "spectral_norm": 2.38,
+      "frobenius_norm": 3.6336,
+      "effective_stable_rank": 20.6,
+      "rank_utilization": 0.64,
+      "top1_energy_ratio": 0.25,
+      "condition_number": 9.52,
+      "has_non_finite": false
+    }
+  ],
+  "pairwise_collisions": [
+    {
+      "adapter_a": "sql-lora",
+      "adapter_b": "rust-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 16,
+      "active_rank_b": 32,
+      "principal_angles_deg": [
+        68.4,
+        74.1,
+        80.2,
+        85.9
+      ],
+      "cos_principal_angle_max": 0.3681,
+      "grassmann_chordal_similarity": 0.24,
+      "grassmann_geodesic_dist": 2.38,
+      "row_chordal_similarity": 0.14,
+      "sign_conflict_rate": 0.12
+    },
+    {
+      "adapter_a": "sql-lora",
+      "adapter_b": "json-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 16,
+      "active_rank_b": 8,
+      "principal_angles_deg": [
+        52.1,
+        61.3,
+        73.5,
+        82.0
+      ],
+      "cos_principal_angle_max": 0.6143,
+      "grassmann_chordal_similarity": 0.41,
+      "grassmann_geodesic_dist": 1.94,
+      "row_chordal_similarity": 0.29,
+      "sign_conflict_rate": 0.26
+    },
+    {
+      "adapter_a": "sql-lora",
+      "adapter_b": "math-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 16,
+      "active_rank_b": 16,
+      "principal_angles_deg": [
+        72.0,
+        77.6,
+        83.4,
+        88.1
+      ],
+      "cos_principal_angle_max": 0.309,
+      "grassmann_chordal_similarity": 0.19,
+      "grassmann_geodesic_dist": 2.52,
+      "row_chordal_similarity": 0.11,
+      "sign_conflict_rate": 0.09
+    },
+    {
+      "adapter_a": "sql-lora",
+      "adapter_b": "python-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 16,
+      "active_rank_b": 32,
+      "principal_angles_deg": [
+        61.5,
+        69.2,
+        76.8,
+        84.3
+      ],
+      "cos_principal_angle_max": 0.4772,
+      "grassmann_chordal_similarity": 0.31,
+      "grassmann_geodesic_dist": 2.18,
+      "row_chordal_similarity": 0.22,
+      "sign_conflict_rate": 0.18
+    },
+    {
+      "adapter_a": "rust-lora",
+      "adapter_b": "json-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 32,
+      "active_rank_b": 8,
+      "principal_angles_deg": [
+        64.2,
+        71.0,
+        78.9,
+        85.1
+      ],
+      "cos_principal_angle_max": 0.4352,
+      "grassmann_chordal_similarity": 0.28,
+      "grassmann_geodesic_dist": 2.26,
+      "row_chordal_similarity": 0.19,
+      "sign_conflict_rate": 0.15
+    },
+    {
+      "adapter_a": "rust-lora",
+      "adapter_b": "math-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 32,
+      "active_rank_b": 16,
+      "principal_angles_deg": [
+        59.8,
+        67.4,
+        75.0,
+        82.7
+      ],
+      "cos_principal_angle_max": 0.503,
+      "grassmann_chordal_similarity": 0.34,
+      "grassmann_geodesic_dist": 2.11,
+      "row_chordal_similarity": 0.25,
+      "sign_conflict_rate": 0.21
+    },
+    {
+      "adapter_a": "rust-lora",
+      "adapter_b": "python-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 32,
+      "active_rank_b": 32,
+      "principal_angles_deg": [
+        24.6,
+        38.2,
+        51.9,
+        64.5
+      ],
+      "cos_principal_angle_max": 0.9092,
+      "grassmann_chordal_similarity": 0.62,
+      "grassmann_geodesic_dist": 1.29,
+      "row_chordal_similarity": 0.51,
+      "sign_conflict_rate": 0.44
+    },
+    {
+      "adapter_a": "json-lora",
+      "adapter_b": "math-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 8,
+      "active_rank_b": 16,
+      "principal_angles_deg": [
+        69.7,
+        75.8,
+        82.1,
+        87.4
+      ],
+      "cos_principal_angle_max": 0.3469,
+      "grassmann_chordal_similarity": 0.22,
+      "grassmann_geodesic_dist": 2.41,
+      "row_chordal_similarity": 0.13,
+      "sign_conflict_rate": 0.1
+    },
+    {
+      "adapter_a": "json-lora",
+      "adapter_b": "python-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 8,
+      "active_rank_b": 32,
+      "principal_angles_deg": [
+        57.9,
+        66.1,
+        74.2,
+        81.9
+      ],
+      "cos_principal_angle_max": 0.5314,
+      "grassmann_chordal_similarity": 0.36,
+      "grassmann_geodesic_dist": 2.05,
+      "row_chordal_similarity": 0.27,
+      "sign_conflict_rate": 0.22
+    },
+    {
+      "adapter_a": "math-lora",
+      "adapter_b": "python-lora",
+      "layer_name": "base_model.model.layers.12.mlp.down_proj",
+      "active_rank_a": 16,
+      "active_rank_b": 32,
+      "principal_angles_deg": [
+        34.5,
+        47.0,
+        58.6,
+        70.2
+      ],
+      "cos_principal_angle_max": 0.8241,
+      "grassmann_chordal_similarity": 0.54,
+      "grassmann_geodesic_dist": 1.56,
+      "row_chordal_similarity": 0.43,
+      "sign_conflict_rate": 0.39
+    }
+  ],
+  "knots_summary": null,
+  "recommendations": [
+    "use_top_k_molora",
+    "use_knots_alignment"
+  ]
+}
